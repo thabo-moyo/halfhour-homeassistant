@@ -1,0 +1,64 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Halfhour",
+        "description": "In Halfhour, open Devices → Connect Home Assistant and type the code it shows.",
+        "data": { "url": "Halfhour address", "code": "Pairing code" }
+      },
+      "mapping": {
+        "title": "Choose your sensors",
+        "description": "Pick the sensor for each reading. Only house load is needed. Turn on \"reversed\" if a sensor counts the other way (for example battery power negative while charging).",
+        "data": {
+          "house_load_w": "House load", "house_load_w_invert": "House load reversed",
+          "grid_w": "Grid power (+ import)", "grid_w_invert": "Grid power reversed",
+          "grid_import_w": "Grid import", "grid_import_w_invert": "Grid import reversed",
+          "grid_export_w": "Grid export", "grid_export_w_invert": "Grid export reversed",
+          "solar_w": "Solar generation", "solar_w_invert": "Solar reversed",
+          "battery_power_w": "Battery power (+ charging)", "battery_power_w_invert": "Battery power reversed",
+          "battery_soc_pct": "Battery state of charge"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Pair again",
+        "description": "Halfhour no longer accepts this home's key. Get a new code from Halfhour → Devices → Connect Home Assistant.",
+        "data": { "code": "Pairing code" }
+      }
+    },
+    "error": {
+      "invalid_code": "That code isn't valid or has expired. Get a new one from Halfhour.",
+      "cannot_connect": "Couldn't reach Halfhour. Check the address and try again.",
+      "device_limit": "Your Halfhour plan has no free device slot. Remove a device or change plan in Halfhour, then try again."
+    },
+    "abort": {
+      "already_configured": "This home is already connected.",
+      "reauth_successful": "Paired again. Uploads will resume.",
+      "cannot_connect": "Couldn't reach Halfhour."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Choose your sensors",
+        "data": {
+          "house_load_w": "House load", "house_load_w_invert": "House load reversed",
+          "grid_w": "Grid power (+ import)", "grid_w_invert": "Grid power reversed",
+          "grid_import_w": "Grid import", "grid_import_w_invert": "Grid import reversed",
+          "grid_export_w": "Grid export", "grid_export_w_invert": "Grid export reversed",
+          "solar_w": "Solar generation", "solar_w_invert": "Solar reversed",
+          "battery_power_w": "Battery power (+ charging)", "battery_power_w_invert": "Battery power reversed",
+          "battery_soc_pct": "Battery state of charge"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "last_upload": { "name": "Last upload" },
+      "queued_samples": { "name": "Queued samples" }
+    },
+    "binary_sensor": {
+      "connected": { "name": "Connected" }
+    }
+  }
+}
