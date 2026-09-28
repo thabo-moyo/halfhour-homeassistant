@@ -49,4 +49,4 @@ uv pip install --python .venv -r requirements_test.txt
 .venv/bin/pytest
 ```
 
-Verified against Home Assistant 2026.2.3.
+Needs Home Assistant 2026.3 or later (for its icon). Verified against 2026.2.3 and 2026.9.4.
