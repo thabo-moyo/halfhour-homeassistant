@@ -134,3 +134,16 @@ async def test_sample_now_adds_mapped_samples(hass, entry):
     rt = await make(hass, entry, FakeClient())
     rt.sample_now()
     assert len(rt.queue) == 1
+
+
+async def test_start_sends_a_first_reading_straight_away(hass, entry):
+    """A newly set-up home shows it's connected at once, not 5 minutes later."""
+    hass.config_entries.async_update_entry(entry, options={CONF_MAPPING: {"house_load_w": {"entity_id": "sensor.load", "invert": False, "unit": "W"}}, CONF_ROLES: []})
+    hass.states.async_set("sensor.load", "400", {"unit_of_measurement": "W"})
+    client = FakeClient()
+    rt = await make(hass, entry, client)
+    rt.async_start()
+    await hass.async_block_till_done()
+    assert [len(b) for b in client.sent] == [1]
+    assert rt.connected and rt.last_upload is not None and len(rt.queue) == 0
+    await rt.async_stop()

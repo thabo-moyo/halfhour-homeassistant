@@ -44,6 +44,9 @@ class HalfhourRuntime:
     def async_start(self) -> None:
         self._unsubs.append(async_track_time_interval(self.hass, self._on_sample_tick, SAMPLE_INTERVAL))
         self._unsubs.append(async_track_time_interval(self.hass, self._on_upload_tick, UPLOAD_INTERVAL))
+        # Read once now so the first upload carries something: a new home
+        # shows it's connected straight away instead of after UPLOAD_INTERVAL.
+        self.sample_now()
         self.entry.async_create_background_task(self.hass, self.async_upload(), "halfhour first upload")
 
     async def async_stop(self) -> None:
