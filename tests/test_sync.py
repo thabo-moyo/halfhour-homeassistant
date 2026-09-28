@@ -1,5 +1,6 @@
 """The sync engine: cursors, windows, handover, and every gateway answer."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -512,4 +513,61 @@ async def test_cursors_without_invert_or_kind_are_kept(hass, now):
     await sync.async_load()
     await sync.async_sync()
     assert min(start for _, _, start, _ in stats.asked) >= datetime(2026, 9, 28, 11, 0, tzinfo=UTC)
+    await sync.async_stop()
+
+
+async def test_resync_drops_the_cursors_and_backfills(hass, now):
+    """The resync command: forget what the hub has, save that, and start again."""
+    hass.states.async_set("sensor.load", "400", {"state_class": "measurement"})
+    entry = load_entry(hass, LOAD)
+    await cursor_store(hass, entry).async_save({"hub_id": "hub-1", "cursors": CURSORS})
+    stats = FakeStats()
+    sync = HalfhourSync(hass, entry, FakeClient(), stats)
+    await sync.async_load()
+    saves = []
+    real_save = sync._save
+
+    async def spy_save():
+        saves.append(dict(sync._cursors))
+        await real_save()
+
+    sync._save = spy_save
+    await sync.async_resync()
+    assert saves[0] == {}  # dropped and saved before the sync ran
+    assert min(start for _, _, start, _ in stats.asked) < datetime(2026, 1, 1, tzinfo=UTC)  # backfilling from MAX_AGE
+    await sync.async_stop()
+
+
+class GatedStats(FakeStats):
+    """Holds the first fetch until released, so a sync can be caught mid-flight."""
+
+    def __init__(self):
+        super().__init__()
+        self.entered, self.release = asyncio.Event(), asyncio.Event()
+
+    async def __call__(self, *args):
+        self.entered.set()
+        await self.release.wait()
+        return await super().__call__(*args)
+
+
+async def test_resync_during_a_running_sync_is_not_undone(hass, now, freezer):
+    hass.states.async_set("sensor.load", "400", {"state_class": "measurement"})
+    entry = load_entry(hass, LOAD)
+    await cursor_store(hass, entry).async_save({"hub_id": "hub-1", "cursors": CURSORS})
+    stats = GatedStats()
+    sync = HalfhourSync(hass, entry, FakeClient(), stats)
+    await sync.async_load()
+    running = hass.async_create_task(sync.async_sync())
+    await stats.entered.wait()
+    await sync.async_resync()  # mid-flight: must not be overwritten by the running sync's move/save
+    stats.release.set()
+    await running
+    assert sync.cursors == {}
+    assert (await cursor_store(hass, entry).async_load())["cursors"] == {}
+    stats.asked.clear()
+    freezer.tick(1)
+    async_fire_time_changed(hass)  # the follow-up sync the reset scheduled
+    await hass.async_block_till_done()
+    assert stats.asked and min(start for _, _, start, _ in stats.asked) < datetime(2026, 1, 1, tzinfo=UTC)
     await sync.async_stop()

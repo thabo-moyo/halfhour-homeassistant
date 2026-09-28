@@ -25,3 +25,6 @@ SHORT_TERM = timedelta(days=11)  # 5-minute statistics are never older than this
 BACKOFF_START = 30  # s
 BACKOFF_MAX = 1800  # s
 STORAGE_VERSION = 1
+DEFAULT_STALE_AFTER = 5400  # s a Plan stays fresh when the server doesn't say
+CLOCK_SKEW = timedelta(minutes=5)  # a Plan made further ahead of HA's clock than this is logged
+BROKER_RECHECK = timedelta(minutes=15)  # how often /ha/config is re-read while no broker is usable

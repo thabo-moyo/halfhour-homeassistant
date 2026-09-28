@@ -1,4 +1,4 @@
-"""Base entity: one Halfhour device per paired home, updated by the sync."""
+"""Base entity: one Halfhour device per paired home, updated by the sync, channel and Plan."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 class HalfhourEntity(Entity):
     _attr_has_entity_name = True
     _attr_should_poll = False
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_category: EntityCategory | None = EntityCategory.DIAGNOSTIC
 
     def __init__(self, entry: HalfhourConfigEntry, key: str) -> None:
         self.runtime = entry.runtime_data

@@ -271,4 +271,4 @@ async def test_reconfigure_to_a_new_hub_backfills_it_from_the_start(hass: HomeAs
         r = await hass.config_entries.flow.async_configure(r["flow_id"], {CONF_URL: "https://new.hh.test", "code": "X"})
         await hass.async_block_till_done()
     assert r["reason"] == "reconfigure_successful"
-    assert entry.runtime_data.cursors == {}
+    assert entry.runtime_data.sync.cursors == {}

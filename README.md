@@ -2,15 +2,20 @@
 
 Sends your home's half-hourly energy use (house load, and optionally grid,
 solar and battery) to [Halfhour](https://halfhour.energy), so its forecasts,
-battery plans and tariff comparisons use your real usage rather than a model.
+battery plans and tariff comparisons use your real usage rather than a model,
+and shows Halfhour's live battery plan in Home Assistant.
+
+The integration never writes to your inverter, battery or any other hardware
+in this version: the plan is shown, read-only.
 
 ## What it does
 
 Home Assistant's recorder already keeps statistics for your power and energy
 sensors. This integration reads those statistics, turns them into half-hour
-averages and uploads them to your Halfhour account. Home Assistant only ever
-connects out; Halfhour never connects in, so there is nothing to open on your
-router.
+averages and uploads them to your Halfhour account. It also keeps a live
+connection to Halfhour, over which each new plan arrives as soon as it is made.
+Home Assistant only ever connects out; Halfhour never connects in, so there
+is nothing to open on your router.
 
 Use cases:
 
@@ -104,6 +109,12 @@ fresh pairing code; your sensor choices and entities are kept.
 - If Halfhour can't be reached, nothing is lost: each sensor's position is
   saved, and the next successful sync picks up where it stopped. A restart of
   Home Assistant is the same.
+- **Plans** arrive over the live connection (MQTT) as soon as Halfhour makes
+  them, with no polling. The newest plan is kept, so an older one delivered
+  late never replaces it, and it is saved, so it survives a restart. The plan
+  entities move to the next slot at every half-hour boundary. If the live
+  connection drops, it reconnects by itself, backing off up to 5 minutes;
+  uploads carry on over HTTPS meanwhile.
 
 ## Supported devices
 
@@ -113,7 +124,8 @@ sensors, and so on). A preset pre-fills the form for Victron GX systems.
 
 ## Supported functions
 
-The integration adds one **Halfhour** device with three diagnostic entities:
+The integration adds one **Halfhour** device with these diagnostic entities
+for uploads:
 
 | Entity | Shows |
 |---|---|
@@ -121,7 +133,38 @@ The integration adds one **Halfhour** device with three diagnostic entities:
 | `sensor.halfhour_synced_up_to` | Everything before this time is final at Halfhour. |
 | `binary_sensor.halfhour_connected` | On while uploads succeed; off while Halfhour can't be reached or refuses this home's key. |
 
-It provides no actions, triggers or conditions of its own.
+and the live plan, below. It provides no actions, triggers or conditions of
+its own.
+
+## Live plan (read-only)
+
+Halfhour's optimiser plans your battery in half-hour slots. Each plan it makes
+is pushed to Home Assistant, and these entities show the slot covering now:
+
+| Entity | Shows |
+|---|---|
+| `sensor.halfhour_plan_grid_power` | Planned grid power for this slot, W (+ importing, − exporting). |
+| `sensor.halfhour_plan_battery_power` | Planned battery power for this slot, W (+ charging, − discharging). |
+| `sensor.halfhour_plan_soc_target` | The battery level the plan aims for in this slot, %. |
+| `sensor.halfhour_plan_made` | When the plan in use was made. |
+| `binary_sensor.halfhour_plan_stale` | On (a problem) when the plan shouldn't be trusted. |
+| `binary_sensor.halfhour_live` | On while the live connection to Halfhour is up. |
+
+The three plan targets (grid power, battery power, SoC target) are ordinary
+measurement sensors, so they chart and keep long-term statistics like any
+other; Plan made, Plan stale and Live are diagnostic. The slot values are
+unknown when there is no plan yet, or when no slot of the plan covers the
+current time.
+
+**When a plan counts as stale.** Plan stale is on when there is no plan, when
+the plan is older than Halfhour's freshness limit (90 minutes unless Halfhour
+says otherwise), or when the plan has no slot covering now. Age is measured
+from when the plan was made, by Home Assistant's clock, so keep that clock
+right: a plan that looks more than 5 minutes ahead of it is noted in the log.
+A stale plan's values stay visible, so you can see what it last said.
+
+These entities are for display and your own automations. The integration
+itself never writes to hardware in this version.
 
 ## Automation example
 
@@ -155,12 +198,37 @@ automation:
   device on your Halfhour account.
 - A gap in a sensor's statistics is a gap at Halfhour; it is never filled
   with zeros.
+- The plan is read-only: this version never controls a battery or inverter.
+- The live connection must be encrypted unless the broker is on your local
+  network.
 
 ## Troubleshooting
 
 - **Connected is off.** Home Assistant can't reach Halfhour. Check the
   internet connection; uploads resume by themselves and nothing is lost. The
   log notes it once at info level when it starts, and again when it recovers.
+- **Live is off.** Home Assistant can't reach Halfhour's live connection.
+  It reconnects by itself; uploads are separate and carry on. The log notes
+  it once at info level when Live goes down, and again when it is back. If
+  Live stays off, check the log. When the live connection refuses this
+  home's key, Home Assistant first checks the key with Halfhour: only if
+  Halfhour refuses it too are you asked to pair again; otherwise it's
+  treated as an outage and retried at least a minute apart. A repair **"Halfhour's live connection needs TLS"**
+  means Halfhour offered an unencrypted address outside your local network,
+  which Home Assistant refuses. Live is also off when your Halfhour server has
+  no live connection configured. In both cases Home Assistant asks Halfhour
+  again every 15 minutes and connects by itself once a secure (`mqtts://` or
+  `wss://`) or local address is offered; no restart is needed.
+- **No plan (the plan entities are unknown).** Halfhour hasn't made a plan for
+  this home yet, or the latest plan has no slot for now. A new home shows no
+  plan until the optimiser's next run; check that Live is on. For now
+  Halfhour's optimiser plans for one home only (its owner's): every other
+  home stays on no plan until the optimiser serves more than one home, even
+  with Live on.
+- **Plan stale is on.** The plan is older than the freshness limit or has run
+  out of slots: Halfhour hasn't sent a new one. Check Live, and Plan made for
+  when the last one arrived. If Plan made looks wrong by more than a few
+  minutes, check Home Assistant's clock.
 - **Synced up to is falling behind.** After first setup this is the backfill
   working through history; give it about 15 minutes. If it stays behind,
   check Connected and the log.
@@ -172,14 +240,15 @@ automation:
   **Devices → Link a device → Smart home hub → Home Assistant** and enter it
   when Home Assistant asks.
 - **Diagnostics.** **⋮ → Download diagnostics** on the integration gives the
-  sync state with the key removed; attach it to an
+  sync state, the live connection, the plan in use and the last few commands
+  from Halfhour, with the key removed; attach it to an
   [issue](https://github.com/thabo-moyo/halfhour-homeassistant/issues).
 
 ## Removal
 
 1. In Home Assistant, go to **Settings → Devices & services → Halfhour**,
-   open **⋮** and choose **Delete**. This stops uploads and forgets the sync
-   positions.
+   open **⋮** and choose **Delete**. This stops uploads, closes the live
+   connection and forgets the sync positions and the saved plan.
 2. In Halfhour, go to **Devices** and **Unlink** Home Assistant. This revokes
    the key Home Assistant held.
 3. If you installed with HACS, remove **Halfhour** in HACS and restart Home

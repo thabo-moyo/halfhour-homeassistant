@@ -1,0 +1,39 @@
+{
+  "v": 1,
+  "id": "golden-1",
+  "account": "default",
+  "made_at": "2026-09-27T23:55:00Z",
+  "slot_minutes": 30,
+  "slots": [
+    {
+      "start": "2026-09-28T00:00:00Z",
+      "import_p": 7,
+      "export_p": 12.34,
+      "load_w": 400,
+      "pv_w": 0,
+      "battery_w": 3000,
+      "grid_w": 3400,
+      "soc": 65
+    },
+    {
+      "start": "2026-09-28T00:30:00Z",
+      "import_p": 29.345,
+      "export_p": 20,
+      "load_w": 600,
+      "pv_w": 250,
+      "battery_w": -2000,
+      "grid_w": -1650,
+      "soc": 50
+    },
+    {
+      "start": "2026-09-28T01:00:00Z",
+      "import_p": 25,
+      "export_p": 15,
+      "load_w": null,
+      "pv_w": 0,
+      "battery_w": null,
+      "grid_w": null,
+      "soc": null
+    }
+  ]
+}

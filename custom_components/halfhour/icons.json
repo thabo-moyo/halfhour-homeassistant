@@ -1,13 +1,43 @@
 {
   "entity": {
     "sensor": {
-      "last_upload": { "default": "mdi:cloud-upload" },
-      "synced_until": { "default": "mdi:history" }
+      "last_upload": {
+        "default": "mdi:cloud-upload"
+      },
+      "synced_until": {
+        "default": "mdi:history"
+      },
+      "plan_grid_power": {
+        "default": "mdi:transmission-tower"
+      },
+      "plan_battery_power": {
+        "default": "mdi:home-battery-outline"
+      },
+      "plan_soc_target": {
+        "default": "mdi:battery-arrow-up-outline"
+      },
+      "plan_made": {
+        "default": "mdi:calendar-clock"
+      }
     },
     "binary_sensor": {
       "connected": {
         "default": "mdi:cloud-off-outline",
-        "state": { "on": "mdi:cloud-check-outline" }
+        "state": {
+          "on": "mdi:cloud-check-outline"
+        }
+      },
+      "live": {
+        "default": "mdi:lan-disconnect",
+        "state": {
+          "on": "mdi:lan-connect"
+        }
+      },
+      "plan_stale": {
+        "default": "mdi:calendar-check",
+        "state": {
+          "on": "mdi:calendar-alert"
+        }
       }
     }
   }

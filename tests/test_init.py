@@ -48,7 +48,7 @@ async def test_setup_creates_diagnostic_entities_and_unloads(recorder_mock: Reco
         assert hass.states.get(entity_id) is not None, entity_id
     assert hass.states.get("sensor.halfhour_queued_samples") is None
 
-    sync = entry.runtime_data
+    sync = entry.runtime_data.sync
     with patch.object(sync, "async_stop", wraps=sync.async_stop) as stop:
         assert await hass.config_entries.async_unload(entry.entry_id)
     stop.assert_awaited_once()

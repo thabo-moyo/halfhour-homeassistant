@@ -102,6 +102,7 @@ class HalfhourSync:
         self._stopped = False
         self._last_send: datetime | None = None  # when the last request went out, for pacing
         self._auth_failed = False
+        self._reset_pending = False  # a resync arrived during a sync: apply it when the sync ends
         self._unreachable = False  # logged "unreachable" and not yet "reachable again"
         self._unsubs: list[CALLBACK_TYPE] = []
         self._later: CALLBACK_TYPE | None = None
@@ -163,6 +164,23 @@ class HalfhourSync:
 
     async def async_remove(self) -> None:
         await self._store.async_remove()
+
+    async def async_resync(self) -> None:
+        """Forget what the hub has (as a hub change does), save that, and sync from the start.
+
+        A sync already running would write its cursors back over the reset,
+        so then the reset waits for that sync to end (see async_sync).
+        """
+        self._reset_pending = True
+        if self._syncing:
+            return
+        await self._apply_reset()
+        await self.async_sync()
+
+    async def _apply_reset(self) -> None:
+        self._reset_pending = False
+        self._cursors = {}
+        await self._save()
 
     # -- scheduling ----------------------------------------------------------
 
@@ -298,6 +316,10 @@ class HalfhourSync:
             await self._save_and_drain(now)
         finally:
             self._syncing = False
+            if self._reset_pending and not self._stopped:
+                await self._apply_reset()
+                if self._later is None:  # a pending drain or retry will start from the reset anyway
+                    self._schedule(0)
             self._notify()
 
     async def _collect(

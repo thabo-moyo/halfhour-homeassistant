@@ -10,14 +10,17 @@ rules:
     comment: >-
       Nothing polls a device: the integration pushes to Halfhour. Its sync runs
       every 5 minutes because that is when the recorder compiles 5-minute
-      statistics; a shorter interval would find nothing new.
+      statistics; a shorter interval would find nothing new. Plans are pushed
+      to it over MQTT, never polled.
   brands: done
   common-modules: done
   config-flow: done
   config-flow-test-coverage: done
   dependency-transparency:
     status: done
-    comment: No requirements; HTTP goes through Home Assistant's shared aiohttp session.
+    comment: >-
+      One pinned requirement, paho-mqtt (from PyPI), for the live channel. HTTP
+      goes through Home Assistant's shared aiohttp session.
   docs-actions:
     status: exempt
     comment: The integration registers no service actions.
@@ -57,12 +60,19 @@ rules:
     status: done
     comment: >-
       Last upload and Synced up to describe local state and stay available;
-      Connected is itself the availability signal (off while Halfhour can't be
-      reached), so no entity goes unavailable.
+      Connected and Live are themselves the availability signals (off while
+      Halfhour or its broker can't be reached). The Plan sensors keep the last
+      Plan (it is persisted) and are unknown only with no Plan or no slot
+      covering now; Plan stale says when not to trust them. No entity goes
+      unavailable.
   integration-owner: done
   log-when-unavailable:
     status: done
-    comment: Logged once at info when uploads start failing and once when they recover.
+    comment: >-
+      Uploads: logged once at info when they start failing and once when they
+      recover. The live channel likewise logs once at info when Live goes down
+      and once when it is back; each retry is at debug. A key Halfhour itself
+      refuses, or a refused subscription, is a warning.
   parallel-updates:
     status: done
     comment: PARALLEL_UPDATES = 0 on both platforms; the entities never poll.
@@ -96,7 +106,9 @@ rules:
   entity-device-class: done
   entity-disabled-by-default:
     status: exempt
-    comment: Three diagnostic entities, none of them noisy or rarely useful.
+    comment: >-
+      Nine entities, none of them noisy or rarely useful: three for uploads,
+      Live, and five that show the live Plan.
   entity-translations: done
   exception-translations: done
   icon-translations: done
@@ -107,7 +119,9 @@ rules:
     status: done
     comment: >-
       A repair issue when a mapped sensor has no statistics or no longer exists,
-      cleared when fixed. Auth problems go through reauthentication.
+      cleared when fixed, and one when Halfhour offers an unencrypted public
+      broker address. Auth problems (HTTP 401 or a broker refusing the key) go
+      through reauthentication.
   stale-devices:
     status: exempt
     comment: One device per config entry, removed with it.
@@ -115,7 +129,11 @@ rules:
   # Platinum
   async-dependency:
     status: done
-    comment: No library; the client is async aiohttp code in api.py.
+    comment: >-
+      The HTTP client is async aiohttp code in api.py. paho-mqtt is not
+      asyncio-native: it runs its own network thread, its blocking connect and
+      disconnect run in the executor, and every callback is handed to the
+      event loop before touching state (channel.py).
   inject-websession:
     status: done
     comment: The client takes Home Assistant's shared aiohttp session.
