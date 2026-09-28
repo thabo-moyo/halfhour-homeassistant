@@ -1,0 +1,14 @@
+{
+  "entity": {
+    "sensor": {
+      "last_upload": { "default": "mdi:cloud-upload" },
+      "synced_until": { "default": "mdi:history" }
+    },
+    "binary_sensor": {
+      "connected": {
+        "default": "mdi:cloud-off-outline",
+        "state": { "on": "mdi:cloud-check-outline" }
+      }
+    }
+  }
+}

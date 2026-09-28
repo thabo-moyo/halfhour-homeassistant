@@ -44,12 +44,12 @@ async def test_pair_device_limit_is_a_distinct_error(hass: HomeAssistant, aiocli
 async def test_send_gzips_with_bearer(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker):
     aioclient_mock.post(f"{BASE}/api/v1/ha/telemetry", status=202, json={"accepted": 1})
     client = HalfhourClient(async_get_clientsession(hass), BASE, "hh_dev_tok")
-    samples = [{"ts": "2026-09-27T10:00:00+00:00", "role": "house_load_w", "value": 400.0}]
-    assert await client.send(samples) == 1
+    slots = [{"slot": "2026-09-27T10:00:00+00:00", "role": "house_load_w", "value": 400.0, "coverage_s": 1800, "resolution_s": 300}]
+    assert await client.send(slots) == 1
     _, _, data, headers = aioclient_mock.mock_calls[0]
     assert headers["Authorization"] == "Bearer hh_dev_tok"
     assert headers["Content-Encoding"] == "gzip"
-    assert json.loads(gzip.decompress(data)) == {"samples": samples}
+    assert json.loads(gzip.decompress(data)) == {"slots": slots}
 
 
 @pytest.mark.parametrize(
@@ -78,3 +78,29 @@ async def test_connection_error_is_retry_later(hass: HomeAssistant, aioclient_mo
     aioclient_mock.post(f"{BASE}/api/v1/ha/telemetry", exc=TimeoutError())
     with pytest.raises(RetryLater):
         await HalfhourClient(async_get_clientsession(hass), BASE, "t").send([])
+
+
+async def test_pair_unreachable_stays_retry_later(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker):
+    aioclient_mock.post(f"{BASE}/api/v1/ha/pair", status=503)
+    with pytest.raises(RetryLater) as info:
+        await HalfhourClient(async_get_clientsession(hass), BASE).pair("X", "i", "v")
+    assert not isinstance(info.value, DeviceLimitError)
+    assert info.value.status == 503
+
+
+async def test_config_returns_roles_and_presets(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker):
+    aioclient_mock.get(f"{BASE}/api/v1/ha/config", json={"roles": [], "presets": []})
+    assert await HalfhourClient(async_get_clientsession(hass), BASE, "t").config() == {"roles": [], "presets": []}
+
+
+@pytest.mark.parametrize("text", ["not json", "[1, 2]"])
+async def test_non_object_body_reads_as_empty(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, text):
+    aioclient_mock.get(f"{BASE}/api/v1/ha/config", text=text)
+    assert await HalfhourClient(async_get_clientsession(hass), BASE, "t").config() == {}
+
+
+async def test_unparseable_retry_after_is_ignored(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker):
+    aioclient_mock.post(f"{BASE}/api/v1/ha/telemetry", status=429, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"})
+    with pytest.raises(RetryLater) as info:
+        await HalfhourClient(async_get_clientsession(hass), BASE, "t").send([])
+    assert info.value.retry_after is None

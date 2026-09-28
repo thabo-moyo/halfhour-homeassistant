@@ -1,0 +1,124 @@
+# Integration quality scale: https://developers.home-assistant.io/docs/core/integration-quality-scale/rules
+# Target: Platinum. Every rule is done, or exempt with the reason.
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: The integration registers no service actions.
+  appropriate-polling:
+    status: exempt
+    comment: >-
+      Nothing polls a device: the integration pushes to Halfhour. Its sync runs
+      every 5 minutes because that is when the recorder compiles 5-minute
+      statistics; a shorter interval would find nothing new.
+  brands: done
+  common-modules: done
+  config-flow: done
+  config-flow-test-coverage: done
+  dependency-transparency:
+    status: done
+    comment: No requirements; HTTP goes through Home Assistant's shared aiohttp session.
+  docs-actions:
+    status: exempt
+    comment: The integration registers no service actions.
+  docs-conditions:
+    status: exempt
+    comment: The integration provides no device conditions.
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions: done
+  docs-triggers:
+    status: exempt
+    comment: The integration provides no device triggers.
+  entity-event-setup: done
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure:
+    status: done
+    comment: Pairing with the one-time code is the connection test.
+  test-before-setup:
+    status: done
+    comment: >-
+      async_setup_entry reads GET /ha/config first; 401 raises
+      ConfigEntryAuthFailed, unreachable or 5xx raises ConfigEntryNotReady.
+  unique-config-entry:
+    status: done
+    comment: Unique id is the Halfhour hub id.
+
+  # Silver
+  action-exceptions:
+    status: exempt
+    comment: The integration registers no service actions.
+  config-entry-unloading: done
+  docs-configuration-parameters: done
+  docs-installation-parameters: done
+  entity-unavailable:
+    status: done
+    comment: >-
+      Last upload and Synced up to describe local state and stay available;
+      Connected is itself the availability signal (off while Halfhour can't be
+      reached), so no entity goes unavailable.
+  integration-owner: done
+  log-when-unavailable:
+    status: done
+    comment: Logged once at info when uploads start failing and once when they recover.
+  parallel-updates:
+    status: done
+    comment: PARALLEL_UPDATES = 0 on both platforms; the entities never poll.
+  reauthentication-flow: done
+  test-coverage:
+    status: done
+    comment: At least 95 % per module, enforced in CI by scripts/check_coverage.py.
+
+  # Gold
+  devices:
+    status: done
+    comment: One service device per paired home.
+  diagnostics: done
+  discovery:
+    status: exempt
+    comment: Halfhour is a cloud service; there is nothing on the network to discover.
+  discovery-update-info:
+    status: exempt
+    comment: Halfhour is a cloud service; there is nothing on the network to discover.
+  docs-data-update: done
+  docs-examples: done
+  docs-known-limitations: done
+  docs-supported-devices: done
+  docs-supported-functions: done
+  docs-troubleshooting: done
+  docs-use-cases: done
+  dynamic-devices:
+    status: exempt
+    comment: One device per config entry, created with it.
+  entity-category: done
+  entity-device-class: done
+  entity-disabled-by-default:
+    status: exempt
+    comment: Three diagnostic entities, none of them noisy or rarely useful.
+  entity-translations: done
+  exception-translations: done
+  icon-translations: done
+  reconfiguration-flow:
+    status: done
+    comment: Change the Halfhour address and pair again, keeping the entry, entities and mapping.
+  repair-issues:
+    status: done
+    comment: >-
+      A repair issue when a mapped sensor has no statistics or no longer exists,
+      cleared when fixed. Auth problems go through reauthentication.
+  stale-devices:
+    status: exempt
+    comment: One device per config entry, removed with it.
+
+  # Platinum
+  async-dependency:
+    status: done
+    comment: No library; the client is async aiohttp code in api.py.
+  inject-websession:
+    status: done
+    comment: The client takes Home Assistant's shared aiohttp session.
+  strict-typing:
+    status: done
+    comment: mypy --strict is clean over custom_components/halfhour and runs in CI.

@@ -68,8 +68,8 @@ class HalfhourClient:
     async def config(self) -> dict[str, Any]:
         return await self._request("GET", "/ha/config")
 
-    async def send(self, samples: list[dict[str, Any]]) -> int:
-        body = await self._request("POST", "/ha/telemetry", {"samples": samples}, compress=True)
+    async def send(self, slots: list[dict[str, Any]]) -> int:
+        body = await self._request("POST", "/ha/telemetry", {"slots": slots}, compress=True)
         return int(body.get("accepted", 0))
 
     async def _request(self, method: str, path: str, payload: Any = None, compress: bool = False) -> dict[str, Any]:

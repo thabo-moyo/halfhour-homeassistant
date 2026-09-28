@@ -3,37 +3,84 @@
     "step": {
       "user": {
         "title": "Connect to Halfhour",
-        "description": "In Halfhour, open Devices → Connect Home Assistant and type the code it shows.",
-        "data": { "url": "Halfhour address", "code": "Pairing code" }
+        "description": "In Halfhour → Devices → Link a device → Smart home hub → Home Assistant, type the code it shows.",
+        "data": {
+          "url": "Halfhour address",
+          "code": "Pairing code"
+        },
+        "data_description": {
+          "url": "Leave as shown unless Halfhour's pairing screen shows a different address.",
+          "code": "The 8-character code from Halfhour → Devices → Link a device → Smart home hub → Home Assistant."
+        }
       },
       "mapping": {
         "title": "Choose your sensors",
         "description": "Pick the sensor for each reading. Only house load is needed. Turn on \"reversed\" if a sensor counts the other way (for example battery power negative while charging).",
         "data": {
-          "house_load_w": "House load", "house_load_w_invert": "House load reversed",
-          "grid_w": "Grid power (+ import)", "grid_w_invert": "Grid power reversed",
-          "grid_import_w": "Grid import", "grid_import_w_invert": "Grid import reversed",
-          "grid_export_w": "Grid export", "grid_export_w_invert": "Grid export reversed",
-          "solar_w": "Solar generation", "solar_w_invert": "Solar reversed",
-          "battery_power_w": "Battery power (+ charging)", "battery_power_w_invert": "Battery power reversed",
+          "house_load_w": "House load",
+          "house_load_w_invert": "House load reversed",
+          "grid_w": "Grid power (+ import)",
+          "grid_w_invert": "Grid power reversed",
+          "grid_import_w": "Grid import",
+          "grid_import_w_invert": "Grid import reversed",
+          "grid_export_w": "Grid export",
+          "grid_export_w_invert": "Grid export reversed",
+          "solar_w": "Solar generation",
+          "solar_w_invert": "Solar reversed",
+          "battery_power_w": "Battery power (+ charging)",
+          "battery_power_w_invert": "Battery power reversed",
           "battery_soc_pct": "Battery state of charge"
+        },
+        "data_description": {
+          "house_load_w": "A power sensor (W) or, better, an energy counter (kWh) with statistics.",
+          "house_load_w_invert": "Turn on if this sensor counts the other way.",
+          "grid_w": "A power sensor (W) with statistics. Not an energy counter: a counter only rises, so it can't say which way the power flows.",
+          "grid_w_invert": "Turn on if this sensor counts the other way.",
+          "grid_import_w": "A power sensor (W) or, better, an energy counter (kWh) with statistics.",
+          "grid_import_w_invert": "Turn on if this sensor counts the other way.",
+          "grid_export_w": "A power sensor (W) or, better, an energy counter (kWh) with statistics.",
+          "grid_export_w_invert": "Turn on if this sensor counts the other way.",
+          "solar_w": "A power sensor (W) or, better, an energy counter (kWh) with statistics.",
+          "solar_w_invert": "Turn on if this sensor counts the other way.",
+          "battery_power_w": "A power sensor (W) with statistics. Not an energy counter: a counter only rises, so it can't say which way the power flows.",
+          "battery_power_w_invert": "Turn on if this sensor counts the other way.",
+          "battery_soc_pct": "A battery state-of-charge sensor (%) with statistics."
         }
       },
       "reauth_confirm": {
         "title": "Pair again",
-        "description": "Halfhour no longer accepts this home's key. Get a new code from Halfhour → Devices → Connect Home Assistant.",
-        "data": { "code": "Pairing code" }
+        "description": "Halfhour no longer accepts this home's key. Get a new code from Halfhour → Devices → Link a device → Smart home hub → Home Assistant.",
+        "data": {
+          "code": "Pairing code"
+        },
+        "data_description": {
+          "code": "The 8-character code from Halfhour → Devices → Link a device → Smart home hub → Home Assistant."
+        }
+      },
+      "reconfigure": {
+        "title": "Change Halfhour address",
+        "description": "A home's key belongs to one Halfhour server, so moving pairs again. Enter the new address and a fresh code from Halfhour → Devices → Link a device → Smart home hub → Home Assistant. Your sensor choices are kept.",
+        "data": {
+          "url": "Halfhour address",
+          "code": "Pairing code"
+        },
+        "data_description": {
+          "url": "Leave as shown unless Halfhour's pairing screen shows a different address.",
+          "code": "The 8-character code from Halfhour → Devices → Link a device → Smart home hub → Home Assistant."
+        }
       }
     },
     "error": {
       "invalid_code": "That code isn't valid or has expired. Get a new one from Halfhour.",
       "cannot_connect": "Couldn't reach Halfhour. Check the address and try again.",
-      "device_limit": "Your Halfhour plan has no free device slot. Remove a device or change plan in Halfhour, then try again."
+      "device_limit": "Your Halfhour plan has no free device slot. Remove a device or change plan in Halfhour, then try again.",
+      "no_statistics": "This sensor has no statistics. Give it a state_class or pick another."
     },
     "abort": {
       "already_configured": "This home is already connected.",
       "reauth_successful": "Paired again. Uploads will resume.",
-      "cannot_connect": "Couldn't reach Halfhour."
+      "cannot_connect": "Couldn't reach Halfhour.",
+      "reconfigure_successful": "Halfhour address changed. Uploads will resume."
     }
   },
   "options": {
@@ -41,24 +88,69 @@
       "init": {
         "title": "Choose your sensors",
         "data": {
-          "house_load_w": "House load", "house_load_w_invert": "House load reversed",
-          "grid_w": "Grid power (+ import)", "grid_w_invert": "Grid power reversed",
-          "grid_import_w": "Grid import", "grid_import_w_invert": "Grid import reversed",
-          "grid_export_w": "Grid export", "grid_export_w_invert": "Grid export reversed",
-          "solar_w": "Solar generation", "solar_w_invert": "Solar reversed",
-          "battery_power_w": "Battery power (+ charging)", "battery_power_w_invert": "Battery power reversed",
+          "house_load_w": "House load",
+          "house_load_w_invert": "House load reversed",
+          "grid_w": "Grid power (+ import)",
+          "grid_w_invert": "Grid power reversed",
+          "grid_import_w": "Grid import",
+          "grid_import_w_invert": "Grid import reversed",
+          "grid_export_w": "Grid export",
+          "grid_export_w_invert": "Grid export reversed",
+          "solar_w": "Solar generation",
+          "solar_w_invert": "Solar reversed",
+          "battery_power_w": "Battery power (+ charging)",
+          "battery_power_w_invert": "Battery power reversed",
           "battery_soc_pct": "Battery state of charge"
+        },
+        "description": "Pick the sensor for each reading. Only house load is needed.",
+        "data_description": {
+          "house_load_w": "A power sensor (W) or, better, an energy counter (kWh) with statistics.",
+          "house_load_w_invert": "Turn on if this sensor counts the other way.",
+          "grid_w": "A power sensor (W) with statistics. Not an energy counter: a counter only rises, so it can't say which way the power flows.",
+          "grid_w_invert": "Turn on if this sensor counts the other way.",
+          "grid_import_w": "A power sensor (W) or, better, an energy counter (kWh) with statistics.",
+          "grid_import_w_invert": "Turn on if this sensor counts the other way.",
+          "grid_export_w": "A power sensor (W) or, better, an energy counter (kWh) with statistics.",
+          "grid_export_w_invert": "Turn on if this sensor counts the other way.",
+          "solar_w": "A power sensor (W) or, better, an energy counter (kWh) with statistics.",
+          "solar_w_invert": "Turn on if this sensor counts the other way.",
+          "battery_power_w": "A power sensor (W) with statistics. Not an energy counter: a counter only rises, so it can't say which way the power flows.",
+          "battery_power_w_invert": "Turn on if this sensor counts the other way.",
+          "battery_soc_pct": "A battery state-of-charge sensor (%) with statistics."
         }
       }
+    },
+    "error": {
+      "no_statistics": "This sensor has no statistics. Give it a state_class or pick another."
     }
   },
   "entity": {
     "sensor": {
-      "last_upload": { "name": "Last upload" },
-      "queued_samples": { "name": "Queued samples" }
+      "last_upload": {
+        "name": "Last upload"
+      },
+      "synced_until": {
+        "name": "Synced up to"
+      }
     },
     "binary_sensor": {
-      "connected": { "name": "Connected" }
+      "connected": {
+        "name": "Connected"
+      }
+    }
+  },
+  "exceptions": {
+    "auth_failed": {
+      "message": "Halfhour no longer accepts this home's key. Pair again from Halfhour → Devices → Link a device → Smart home hub → Home Assistant."
+    },
+    "cannot_connect": {
+      "message": "Couldn't reach Halfhour. Home Assistant will keep trying."
+    }
+  },
+  "issues": {
+    "no_statistics": {
+      "title": "Halfhour can't read {entity_id}",
+      "description": "{entity_id} has no long-term statistics (or no longer exists), so Halfhour can't send its readings. Give it a state_class (for example measurement), or choose another sensor under Halfhour → Configure."
     }
   }
 }

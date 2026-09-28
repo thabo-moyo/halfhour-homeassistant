@@ -5,10 +5,13 @@
     "@thabo-moyo"
   ],
   "config_flow": true,
+  "dependencies": [
+    "recorder"
+  ],
   "documentation": "https://github.com/thabo-moyo/halfhour-homeassistant",
   "integration_type": "hub",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/thabo-moyo/halfhour-homeassistant/issues",
   "requirements": [],
-  "version": "0.1.2"
+  "version": "0.2.0"
 }
