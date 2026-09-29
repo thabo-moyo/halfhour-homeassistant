@@ -341,3 +341,12 @@ async def test_a_gateway_without_inventories_backs_off_reconnects_for_six_hours(
         assert len(client.sent) == 2  # the 6 h refresh tries again, as documented
     assert [r.levelname for r in caplog.records] == ["INFO"]  # logged once, not once per reconnect
     await uploader.async_stop()
+
+
+async def test_a_unit_the_registry_lacks_comes_from_the_entitys_attributes(hass: HomeAssistant) -> None:
+    """A Min/Max helper works its unit out as it runs: its registry entry has none."""
+    er.async_get(hass).async_get_or_create("sensor", "min_max", "all_solar", suggested_object_id="all_solar_power", original_device_class="power")
+    hass.states.async_set("sensor.all_solar_power", "1234.5", {"unit_of_measurement": "W", "state_class": "measurement", "friendly_name": "secret name"})
+    (item,) = [e for e in build_inventory(hass) if e["entity_id"] == "sensor.all_solar_power"]
+    assert (item["unit"], item["device_class"], item["state_class"]) == ("W", "power", "measurement")
+    assert "1234" not in json.dumps(item) and "secret" not in json.dumps(item)  # never the value or other attributes

@@ -1,9 +1,12 @@
 """The entity inventory: what the home's entities are, never what they read.
 
 Halfhour's device forms offer this home's entities as pickers. The inventory
-is built from the entity, device and area registries only: names, areas,
+is built from the entity, device and area registries: names, areas,
 domains, device classes, units and the ranges a number or select allows.
-No state and no attribute ever leaves the home through it. It is sent on
+Where the registry has no unit, device class or state class (helpers such
+as Min/Max work theirs out as they run), the entity's own attribute of that
+name fills it in. No state value, and no other attribute, ever leaves the
+home through it. It is sent on
 setup, on every (re)connect of the live channel, every 6 hours and,
 debounced, whenever a registry changes; the gateway keeps the latest one per
 hub (replace, not merge), so its age says whether this home is still there.
@@ -52,19 +55,26 @@ def _name(entry: er.RegistryEntry, device: dr.DeviceEntry | None) -> str:
     return entry.original_name or entry.entity_id
 
 
-def _describe(entry: er.RegistryEntry, devices: dr.DeviceRegistry, areas: ar.AreaRegistry) -> dict[str, Any]:
+def _attribute(hass: HomeAssistant, entity_id: str, key: str) -> str | None:
+    """One metadata attribute of the entity as it runs, for what its registry entry lacks."""
+    state = hass.states.get(entity_id)
+    value = state.attributes.get(key) if state is not None else None
+    return value if isinstance(value, str) and value else None
+
+
+def _describe(hass: HomeAssistant, entry: er.RegistryEntry, devices: dr.DeviceRegistry, areas: ar.AreaRegistry) -> dict[str, Any]:
     device = devices.async_get(entry.device_id) if entry.device_id else None
     area_id = entry.area_id or (device.area_id if device is not None else None)
     area = areas.async_get_area(area_id) if area_id else None
     caps = entry.capabilities or {}
     sensor_options: Mapping[str, Any] = entry.options.get("sensor") or {}
-    unit = sensor_options.get("unit_of_measurement") or entry.unit_of_measurement
+    unit = sensor_options.get("unit_of_measurement") or entry.unit_of_measurement or _attribute(hass, entry.entity_id, "unit_of_measurement")
     out: dict[str, Any] = {"entity_id": entry.entity_id, "name": _name(entry, device), "domain": entry.domain}
     optional: dict[str, Any] = {
         "area": area.name if area is not None else None,
-        "device_class": entry.device_class or entry.original_device_class,
+        "device_class": entry.device_class or entry.original_device_class or _attribute(hass, entry.entity_id, "device_class"),
         "unit": unit,
-        "state_class": caps.get("state_class"),
+        "state_class": caps.get("state_class") or _attribute(hass, entry.entity_id, "state_class"),
         "options": caps.get("options") if isinstance(caps.get("options"), list) else None,
         **{k: caps.get(k) for k in _RANGE_KEYS if isinstance(caps.get(k), int | float)},
     }
@@ -86,7 +96,7 @@ def build_inventory(hass: HomeAssistant) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     size = len(json.dumps({"v": 1, "entities": []}))
     for entry in picked:
-        item = _describe(entry, devices, areas)
+        item = _describe(hass, entry, devices, areas)
         size += len(json.dumps(item).encode()) + 2  # ", " between items
         if size > MAX_BYTES:
             _LOGGER.warning("This home's entity inventory is over 1 MiB; only the first %d entities are offered", len(out))

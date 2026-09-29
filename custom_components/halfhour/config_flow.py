@@ -1,4 +1,4 @@
-"""Pair with a one-time code, then map this home's sensors to roles; options add, edit and remove devices."""
+"""Pair with a one-time code, then map this home's sensors to roles; each device behind the home is a subentry."""
 
 from __future__ import annotations
 
@@ -8,24 +8,32 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigEntryState,
+    ConfigFlow,
+    ConfigFlowResult,
+    ConfigSubentryFlow,
+    OptionsFlow,
+    SubentryFlowResult,
+)
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import instance_id
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import SelectOptionDict, SelectSelector, SelectSelectorConfig, TextSelector
+from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, TextSelector
 
 from .api import ConflictError, DeviceLimitError, HalfhourClient, HalfhourError, NotFoundError, PairingError, PairResult, RejectedError
 from .const import CONF_CODE, CONF_HUB_ID, CONF_MAPPING, CONF_ROLES, CONF_TOKEN, CONF_URL, DEFAULT_URL, DOMAIN
 from .device_form import device_body, field_error, find_kind, form_schema, kind_options, suggested_for_new, suggested_from_device, valid_kinds
-from .devices import HubDevice, HubDevices
+from .devices import SUBENTRY_TYPE, HubDevices, device_subentries
 from .mapping import mapping_from_input, mapping_schema, picked, suggest, suggested_from_mapping
 from .runtime import HalfhourRuntime
 from .stats import has_statistics
 
 _LOGGER = logging.getLogger(__name__)
 
-LIST_WAIT = 5.0  # s an options flow waits for the device list carrying its change
+LIST_WAIT = 5.0  # s an edit waits for the device list carrying its change
 
 
 async def _check(hass: HomeAssistant, roles: list[dict[str, Any]], user_input: dict[str, Any]) -> dict[str, str]:
@@ -45,6 +53,11 @@ class HalfhourConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> HalfhourOptionsFlow:
         return HalfhourOptionsFlow()
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(cls, config_entry: ConfigEntry) -> dict[str, type[ConfigSubentryFlow]]:
+        return {SUBENTRY_TYPE: DeviceSubentryFlow}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -154,22 +167,9 @@ class HalfhourConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class HalfhourOptionsFlow(OptionsFlow):
-    """Re-map sensors, or add, edit and remove the devices behind this home, without pairing again."""
-
-    def __init__(self) -> None:
-        self._kind: dict[str, Any] = {}
-        self._device_id = ""
-        self._device_name = ""
-        self._revision: int | None = None
-        self._suggested: dict[str, Any] = {}
+    """Re-map this home's sensors without pairing again."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        options = ["sensors", "add_device"]
-        if self._listed():
-            options += ["edit_device", "remove_device"]
-        return self.async_show_menu(step_id="init", menu_options=options)
-
-    async def async_step_sensors(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         roles: list[dict[str, Any]] = self.config_entry.options[CONF_ROLES]
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -179,11 +179,20 @@ class HalfhourOptionsFlow(OptionsFlow):
             suggested: dict[str, Any] = user_input
         else:
             suggested = suggested_from_mapping(self.config_entry.options.get(CONF_MAPPING, {}))
-        return self.async_show_form(step_id="sensors", data_schema=mapping_schema(roles, suggested), errors=errors)
+        return self.async_show_form(step_id="init", data_schema=mapping_schema(roles, suggested), errors=errors)
 
-    # -- devices behind this home -----------------------------------------------------
 
-    async def async_step_add_device(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+class DeviceSubentryFlow(ConfigSubentryFlow):
+    """Add a device behind this home (Add device), or change one (Reconfigure); Halfhour keeps it, this home follows its list."""
+
+    def __init__(self) -> None:
+        self._kind: dict[str, Any] = {}
+        self._device_id = ""
+        self._device_name = ""
+        self._revision: int | None = None
+        self._suggested: dict[str, Any] = {}
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         kinds, unusable = await self._kinds()
         if unusable:
             return self.async_abort(reason=unusable)
@@ -194,11 +203,11 @@ class HalfhourOptionsFlow(OptionsFlow):
                 errors["kind"] = "kind_unavailable"  # Halfhour stopped serving it since the form was shown
             else:
                 self._kind, self._suggested = kind, suggested_for_new(kind)
-                return await self.async_step_add_details()
+                return await self.async_step_details()
         schema = vol.Schema({vol.Required("kind"): SelectSelector(SelectSelectorConfig(options=kind_options(kinds)))})
-        return self.async_show_form(step_id="add_device", data_schema=schema, errors=errors)
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
-    async def async_step_add_details(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+    async def async_step_details(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         errors: dict[str, str] = {}
         placeholders = self._placeholders()
         if user_input is not None:
@@ -213,28 +222,35 @@ class HalfhourOptionsFlow(OptionsFlow):
             except HalfhourError:
                 errors["base"] = "cannot_connect"
             else:
-                await self._await_list(lambda held: _newer_or_same(held.revision, device.get("revision")))
-                return self.async_abort(reason="device_added", description_placeholders={"name": str(device.get("name") or body["name"])})
-        return self._details_form("add_details", errors, placeholders)
+                name = str(device.get("name") or body["name"])
+                device_id, revision = device.get("id"), device.get("revision")
+                # No awaits from here to the subentry being added: Halfhour's list,
+                # arriving meanwhile, may have made this device's subentry already.
+                if not isinstance(device_id, str) or device_id in device_subentries(self._get_entry()):
+                    return self.async_abort(reason="device_added", description_placeholders={"name": name})
+                data = {"kind": self._kind["kind"], "revision": revision if isinstance(revision, int) and not isinstance(revision, bool) else 0}
+                return self.async_create_entry(title=name, data=data, unique_id=device_id)
+        return self._details_form("details", errors, placeholders)
 
-    async def async_step_edit_device(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        subentry = self._get_reconfigure_subentry()
         held = self._hub_devices()
-        if user_input is not None and held is not None:
-            device = held.device(user_input["device"])
-            if device is None:
-                return self.async_abort(reason="not_found")
-            kinds, unusable = await self._kinds()
-            if unusable:
-                return self.async_abort(reason=unusable)
-            kind = find_kind(kinds, device.kind)
-            if kind is None:
-                return self.async_abort(reason="unknown_kind")
-            self._kind, self._device_id, self._device_name, self._revision = kind, device.id, device.name, held.revision
-            self._suggested = suggested_from_device(kind, device.name, device.mapping, device.facts, device.label)
-            return await self.async_step_edit_details()
-        return self.async_show_form(step_id="edit_device", data_schema=self._device_picker())
+        if held is None:
+            return self.async_abort(reason="not_loaded")
+        device = held.device(subentry.unique_id or "")
+        if device is None:
+            return self.async_abort(reason="not_found")
+        kinds, unusable = await self._kinds()
+        if unusable:
+            return self.async_abort(reason=unusable)
+        kind = find_kind(kinds, device.kind)
+        if kind is None:
+            return self.async_abort(reason="unknown_kind")
+        self._kind, self._device_id, self._device_name, self._revision = kind, device.id, device.name, held.revision
+        self._suggested = suggested_from_device(kind, device.name, device.mapping, device.facts, device.label)
+        return await self.async_step_edit()
 
-    async def async_step_edit_details(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+    async def async_step_edit(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         errors: dict[str, str] = {}
         placeholders = self._placeholders()
         if user_input is not None:
@@ -258,30 +274,16 @@ class HalfhourOptionsFlow(OptionsFlow):
                 errors["base"] = "cannot_connect"
             else:
                 await self._await_list(lambda held: _newer_or_same(held.revision, device.get("revision")))
-                return self.async_abort(reason="device_updated", description_placeholders={"name": str(device.get("name") or body["name"])})
-        return self._details_form("edit_details", errors, placeholders)
-
-    async def async_step_remove_device(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        held = self._hub_devices()
-        if user_input is not None and held is not None:
-            device_id = user_input["device"]
-            device = held.device(device_id)
-            try:
-                await self._client().delete_device(device_id)
-            except NotFoundError:
-                return self.async_abort(reason="not_found")
-            except HalfhourError:
-                errors["base"] = "cannot_connect"
-            else:
-                await self._await_list(lambda now: now.device(device_id) is None)
-                return self.async_abort(reason="device_removed", description_placeholders={"name": device.name if device else device_id})
-        return self.async_show_form(step_id="remove_device", data_schema=self._device_picker(), errors=errors)
+                if self._reconfigure_subentry_id not in self._get_entry().subentries:
+                    return self.async_abort(reason="not_found")  # deleted meanwhile, here or in Halfhour
+                # The title follows Halfhour's list (the name is Halfhour's), not this form.
+                return self.async_abort(reason="reconfigure_successful")
+        return self._details_form("edit", errors, placeholders)
 
     # -- helpers ---------------------------------------------------------------------
 
     def _client(self) -> HalfhourClient:
-        data = self.config_entry.data
+        data = self._get_entry().data
         return HalfhourClient(async_get_clientsession(self.hass), data[CONF_URL], data[CONF_TOKEN])
 
     async def _kinds(self) -> tuple[list[dict[str, Any]], str | None]:
@@ -300,18 +302,11 @@ class HalfhourOptionsFlow(OptionsFlow):
 
     def _hub_devices(self) -> HubDevices | None:
         """The device list the loaded entry holds; None while the entry isn't loaded."""
-        if self.config_entry.state is not ConfigEntryState.LOADED:
+        entry = self._get_entry()
+        if entry.state is not ConfigEntryState.LOADED:
             return None
-        runtime: HalfhourRuntime = self.config_entry.runtime_data
+        runtime: HalfhourRuntime = entry.runtime_data
         return runtime.devices
-
-    def _listed(self) -> tuple[HubDevice, ...]:
-        held = self._hub_devices()
-        return held.devices.devices if held is not None and held.devices is not None else ()
-
-    def _device_picker(self) -> vol.Schema:
-        options = [SelectOptionDict(value=d.id, label=d.name) for d in self._listed()]
-        return vol.Schema({vol.Required("device"): SelectSelector(SelectSelectorConfig(options=options))})
 
     def _placeholders(self) -> dict[str, str]:
         return {"kind": str(self._kind.get("label") or self._kind.get("kind", "")), "name": self._device_name, "field": "", "detail": ""}
@@ -336,7 +331,7 @@ class HalfhourOptionsFlow(OptionsFlow):
             label if isinstance(label, str) else None,
         )
 
-    def _details_form(self, step_id: str, errors: dict[str, str], placeholders: dict[str, str]) -> ConfigFlowResult:
+    def _details_form(self, step_id: str, errors: dict[str, str], placeholders: dict[str, str]) -> SubentryFlowResult:
         schema = self.add_suggested_values_to_schema(form_schema(self._kind), self._suggested)
         return self.async_show_form(step_id=step_id, data_schema=schema, errors=errors, description_placeholders=placeholders)
 

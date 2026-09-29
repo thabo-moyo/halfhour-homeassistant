@@ -40,16 +40,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: HalfhourConfigEntry, asy
 
     @callback
     def _add_devices() -> None:
-        """Add the entities a new device list calls for; the list drops removed ones itself."""
-        expected = expected_entities(entry.entry_id, devices.devices)
-        new: list[SensorEntity] = []
+        """Add the entities a new device list calls for, each under its device's subentry; the list drops removed ones itself."""
+        expected = expected_entities(entry.entry_id, devices.visible())
+        new: dict[str, list[SensorEntity]] = {}
         for unique_id, (device, key) in expected.items():
-            if unique_id not in known:
-                new.append(ControlledBy(entry, device, key) if key == CONTROLLED_BY else DeviceReading(entry, device, key))
-        known.clear()  # a removed device's ids are forgotten, so it can come back
-        known.update(expected)
-        if new:
-            async_add_entities(new)
+            subentry_id = devices.subentry_id(device.id)
+            if unique_id in known or subentry_id is None:
+                continue
+            new.setdefault(subentry_id, []).append(ControlledBy(entry, device, key) if key == CONTROLLED_BY else DeviceReading(entry, device, key))
+            known.add(unique_id)
+        known.intersection_update(expected)  # a removed device's ids are forgotten, so it can come back
+        for subentry_id, entities in new.items():
+            async_add_entities(entities, config_subentry_id=subentry_id)
 
     _add_devices()
     entry.async_on_unload(devices.add_listener(_add_devices))

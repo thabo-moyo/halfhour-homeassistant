@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import CoreState, HomeAssistant
@@ -670,3 +670,87 @@ async def test_synced_until_follows_the_house_roles_and_device_backfill_is_repor
     assert sync.devices_synced_until() == datetime(2025, 10, 3, tzinfo=UTC)
     roles.clear()
     assert sync.devices_synced_until() is None
+
+
+async def test_a_new_device_role_sends_its_latest_slot_with_its_first_window(hass: HomeAssistant, now, freezer):
+    """A device added today backfills a year oldest first: its latest reading goes with the first request, not the last."""
+    hass.states.async_set("sensor.load", "400", {"state_class": "measurement"})
+    hass.states.async_set("sensor.bat_soc", "70", {"state_class": "measurement"})
+    entry = load_entry(hass, LOAD)
+    role = f"dev.{DEV}.soc"
+    year_ago = (now - timedelta(days=361)).replace(minute=0)
+    hourly = [Period(year_ago + timedelta(hours=h), 3600, 50.0, None) for h in range(24 * 361)]
+    stats = FakeStats(hourly={"sensor.bat_soc": hourly}, five={"sensor.bat_soc": five_min(datetime(2026, 9, 28, 10, 0, tzinfo=UTC), 26, 70.0)})
+    roles = {role: {"entity_id": "sensor.bat_soc", "invert": False, "kind": "percent"}}
+    client = FakeClient()
+    sync = HalfhourSync(hass, entry, client, stats, device_roles=lambda: dict(roles))
+    await sync.async_load()
+    sync._cursors = {"house_load_w": {"entity_id": "sensor.load", "cursor": "2026-09-28T11:30:00+00:00"}}
+    await sync.async_sync()
+    sent = [s for s in client.sent[0] if s["role"] == role]
+    # The newest finished slot (at 12:07, 11:00-11:30) rides along with the oldest window...
+    latest = [s for s in sent if s["slot"] == "2026-09-28T11:00:00+00:00"]
+    assert len(latest) == 1 and latest[0]["value"] == 70.0 and latest[0]["coverage_s"] == 1800
+    assert min(s["slot"] for s in sent) < "2025-10-04"  # the backfill starts 360 days back
+    # ...while the cursor only moves past the window: the backfill still reaches every slot.
+    assert sync.cursors[role]["cursor"] < "2025-10-09"
+    freezer.tick(timedelta(seconds=SEND_GAP))
+    await sync.async_sync()
+    assert not any(s["slot"] == "2026-09-28T11:00:00+00:00" for s in client.sent[1] if s["role"] == role)  # once only
+    await sync.async_stop()
+
+
+async def test_a_role_with_a_cursor_sends_no_extra_slot(hass: HomeAssistant, now):
+    hass.states.async_set("sensor.bat_soc", "70", {"state_class": "measurement"})
+    entry = load_entry(hass, {})
+    role = f"dev.{DEV}.soc"
+    stats = FakeStats(five={"sensor.bat_soc": five_min(datetime(2026, 9, 18, 0, 0, tzinfo=UTC), 12 * 24 * 11, 70.0)})
+    client = FakeClient()
+    sync = HalfhourSync(hass, entry, client, stats, device_roles=lambda: {role: {"entity_id": "sensor.bat_soc", "invert": False, "kind": "percent"}})
+    await sync.async_load()
+    sync._cursors = {role: {"entity_id": "sensor.bat_soc", "kind": "percent", "cursor": "2026-09-19T00:00:00+00:00"}}
+    await sync.async_sync()
+    assert max(s["slot"] for s in client.sent[0]) < "2026-09-25"  # one window, nothing from today
+    await sync.async_stop()
+
+
+async def test_a_device_list_with_a_new_role_starts_a_sync(hass: HomeAssistant, now):
+    entry = load_entry(hass, LOAD)
+    roles: dict = {}
+    sync = HalfhourSync(hass, entry, FakeClient(), FakeStats(), device_roles=lambda: dict(roles))
+    await sync.async_load()
+    sync._cursors = {"house_load_w": {"entity_id": "sensor.load", "cursor": "2026-09-28T11:30:00+00:00"}}
+    roles[f"dev.{DEV}.soc"] = {"entity_id": "sensor.bat_soc", "invert": False, "kind": "percent"}
+    with patch.object(sync, "async_sync", AsyncMock()) as early:
+        sync.async_device_list_changed()
+        await hass.async_block_till_done(wait_background_tasks=True)
+    early.assert_not_called()  # not started yet: its first sync covers it
+    with patch.object(sync, "async_sync", AsyncMock()) as run:
+        sync.async_start()
+        await hass.async_block_till_done()
+        run.reset_mock()
+        sync.async_device_list_changed()
+        await hass.async_block_till_done(wait_background_tasks=True)
+        run.assert_called_once()
+        run.reset_mock()
+        sync._cursors[f"dev.{DEV}.soc"] = {"entity_id": "sensor.bat_soc", "kind": "percent", "cursor": "2026-09-28T11:30:00+00:00"}
+        sync.async_device_list_changed()
+        await hass.async_block_till_done(wait_background_tasks=True)
+        run.assert_not_called()  # nothing new: the next tick will do
+    await sync.async_stop()
+
+
+async def test_a_new_energy_device_role_sends_its_latest_slot_from_the_counter(hass: HomeAssistant, now):
+    """An energy head takes its starting total from the row before it: no spike from a zero start."""
+    hass.states.async_set("sensor.pv", "1", {"state_class": "total_increasing", "unit_of_measurement": "kWh"})
+    entry = load_entry(hass, {})
+    role = f"dev.{DEV}.energy"
+    first = datetime(2026, 9, 28, 10, 0, tzinfo=UTC)
+    rows = [Period(first + timedelta(minutes=5 * i), 300, None, 100 + 0.05 * (i + 1)) for i in range(26)]  # 600 W
+    client = FakeClient()
+    sync = HalfhourSync(hass, entry, client, FakeStats(five={"sensor.pv": rows}), device_roles=lambda: {role: {"entity_id": "sensor.pv", "invert": False, "kind": "energy"}})
+    await sync.async_load()
+    await sync.async_sync()
+    head = [s for s in client.sent[0] if s["slot"] == "2026-09-28T11:00:00+00:00"]
+    assert [(s["value"], s["coverage_s"]) for s in head] == [(600.0, 1800)]
+    await sync.async_stop()

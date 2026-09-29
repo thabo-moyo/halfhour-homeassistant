@@ -1,4 +1,4 @@
-"""Pairing, mapping, options (sensors and devices), reauth and reconfigure."""
+"""Pairing, mapping, options (sensors), device subentries, reauth and reconfigure."""
 
 import asyncio
 import json
@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import voluptuous as vol
-from homeassistant.config_entries import SOURCE_USER
+from homeassistant.config_entries import SOURCE_USER, ConfigSubentryData
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.selector import BooleanSelector, EntitySelector, NumberSelector, SelectSelector, TimeSelector
@@ -151,9 +151,7 @@ async def test_options_flow_remaps(hass: HomeAssistant):
     entry = paired_entry(hass)
     with patch(SETUP, return_value=True):
         r = await hass.config_entries.options.async_init(entry.entry_id)
-        assert r["type"] is FlowResultType.MENU and r["step_id"] == "init"
-        r = await hass.config_entries.options.async_configure(r["flow_id"], {"next_step_id": "sensors"})
-        assert r["type"] is FlowResultType.FORM and r["step_id"] == "sensors"
+        assert r["type"] is FlowResultType.FORM and r["step_id"] == "init"  # devices are subentries, not options
         r = await hass.config_entries.options.async_configure(r["flow_id"], {"house_load_w": "sensor.b", "house_load_w_invert": True, "solar_w": "sensor.pv"})
     assert r["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options[CONF_MAPPING]["house_load_w"] == {"entity_id": "sensor.b", "invert": True, "kind": "power"}
@@ -194,9 +192,8 @@ async def test_options_flow_refuses_an_entity_without_statistics(hass: HomeAssis
     entry = paired_entry(hass)
     has_stats.return_value = False
     r = await hass.config_entries.options.async_init(entry.entry_id)
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"next_step_id": "sensors"})
     r = await hass.config_entries.options.async_configure(r["flow_id"], {"house_load_w": "sensor.b", "solar_w": "sensor.pv"})
-    assert r["type"] is FlowResultType.FORM and r["step_id"] == "sensors"
+    assert r["type"] is FlowResultType.FORM and r["step_id"] == "init"
     assert r["errors"] == {"house_load_w": "no_statistics", "solar_w": "no_statistics"}
     assert entry.options[CONF_MAPPING]["house_load_w"]["entity_id"] == "sensor.a"
 
@@ -282,7 +279,7 @@ async def test_reconfigure_to_a_new_hub_backfills_it_from_the_start(hass: HomeAs
     assert entry.runtime_data.sync.cursors == {}
 
 
-# -- options: devices behind Home Assistant ---------------------------------------------
+# -- subentries: devices behind Home Assistant ------------------------------------------
 
 URL = "https://hh.test/api/v1"
 B = "3f2a0000-0000-4000-8000-00000000000b"
@@ -375,7 +372,7 @@ def sent(mock: AiohttpClientMocker, method: str, path: str) -> list:
 
 
 async def loaded_entry(hass: HomeAssistant, mock: AiohttpClientMocker, *devices: dict, revision: int = 3) -> MockConfigEntry:
-    """A set-up entry holding a device list, as after a retained list arrived."""
+    """A set-up entry holding a device list, as after a retained list arrived: one subentry per device."""
     mock.get(f"{URL}/ha/config", json=CONFIG)
     mock.put(f"{URL}/ha/inventory", status=204)
     entry = paired_entry(hass)
@@ -386,10 +383,22 @@ async def loaded_entry(hass: HomeAssistant, mock: AiohttpClientMocker, *devices:
     return entry
 
 
-async def open_menu(hass: HomeAssistant, entry: MockConfigEntry, choice: str) -> dict:
-    r = await hass.config_entries.options.async_init(entry.entry_id)
-    assert r["type"] is FlowResultType.MENU
-    return await hass.config_entries.options.async_configure(r["flow_id"], {"next_step_id": choice})
+async def add_flow(hass: HomeAssistant, entry: MockConfigEntry) -> dict:
+    """Add device, from the entry's page."""
+    return await hass.config_entries.subentries.async_init((entry.entry_id, "device"), context={"source": SOURCE_USER})
+
+
+async def step(hass: HomeAssistant, r: dict, user_input: dict) -> dict:
+    return await hass.config_entries.subentries.async_configure(r["flow_id"], user_input)
+
+
+async def edit_flow(hass: HomeAssistant, entry: MockConfigEntry, device_id: str) -> dict:
+    """Reconfigure on a device's subentry."""
+    return await entry.start_subentry_reconfigure_flow(hass, subentry_of(entry, device_id).subentry_id)
+
+
+def subentry_of(entry: MockConfigEntry, device_id: str):
+    return next(s for s in entry.subentries.values() if s.unique_id == device_id)
 
 
 def field(result: dict, key: str):
@@ -398,23 +407,15 @@ def field(result: dict, key: str):
     return marker, result["data_schema"].schema[marker]
 
 
-async def test_options_menu_without_devices(hass: HomeAssistant, gateway: AiohttpClientMocker):
-    entry = paired_entry(hass)
-    r = await hass.config_entries.options.async_init(entry.entry_id)
-    assert r["type"] is FlowResultType.MENU and r["menu_options"] == ["sensors", "add_device"]
+async def test_the_entry_offers_devices_as_subentries(hass: HomeAssistant):
+    from custom_components.halfhour.config_flow import DeviceSubentryFlow, HalfhourConfigFlow
 
-
-async def test_options_menu_with_devices(hass: HomeAssistant, gateway: AiohttpClientMocker):
-    entry = await loaded_entry(hass, gateway, BATTERY)
-    r = await hass.config_entries.options.async_init(entry.entry_id)
-    assert r["type"] is FlowResultType.MENU
-    assert r["menu_options"] == ["sensors", "add_device", "edit_device", "remove_device"]
+    assert HalfhourConfigFlow.async_get_supported_subentry_types(paired_entry(hass)) == {"device": DeviceSubentryFlow}
 
 
 async def test_add_device_offers_the_served_kinds(hass: HomeAssistant, gateway: AiohttpClientMocker):
-    entry = paired_entry(hass)
-    r = await open_menu(hass, entry, "add_device")
-    assert r["type"] is FlowResultType.FORM and r["step_id"] == "add_device"
+    r = await add_flow(hass, paired_entry(hass))
+    assert r["type"] is FlowResultType.FORM and r["step_id"] == "user"
     _, selector = field(r, "kind")
     assert [(o["value"], o["label"]) for o in selector.config["options"]] == [
         ("battery", "Home battery"),
@@ -426,15 +427,13 @@ async def test_add_device_offers_the_served_kinds(hass: HomeAssistant, gateway: 
 
 async def test_add_device_aborts_when_the_kinds_cannot_be_read(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker):
     aioclient_mock.get(f"{URL}/device-types", status=503)
-    entry = paired_entry(hass)
-    r = await open_menu(hass, entry, "add_device")
+    r = await add_flow(hass, paired_entry(hass))
     assert r["type"] is FlowResultType.ABORT and r["reason"] == "cannot_connect"
 
 
 async def test_add_device_aborts_against_a_gateway_too_old_for_devices(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker):
     aioclient_mock.get(f"{URL}/device-types", json={"items": []})  # served before devices behind a hub existed
-    entry = paired_entry(hass)
-    r = await open_menu(hass, entry, "add_device")
+    r = await add_flow(hass, paired_entry(hass))
     assert r["type"] is FlowResultType.ABORT and r["reason"] == "gateway_too_old"
 
 
@@ -442,9 +441,8 @@ async def test_the_form_has_the_right_selectors_per_kind(hass: HomeAssistant, ga
     entry = paired_entry(hass)
 
     async def form(kind: str) -> dict:
-        r = await open_menu(hass, entry, "add_device")
-        r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": kind})
-        assert r["type"] is FlowResultType.FORM and r["step_id"] == "add_details"
+        r = await step(hass, await add_flow(hass, entry), {"kind": kind})
+        assert r["type"] is FlowResultType.FORM and r["step_id"] == "details"
         return r
 
     r = await form("battery")
@@ -488,14 +486,14 @@ async def test_the_form_has_the_right_selectors_per_kind(hass: HomeAssistant, ga
     assert marker.description == {"suggested_value": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]}
 
 
-async def test_add_flow_creates_a_device(hass: HomeAssistant, gateway: AiohttpClientMocker):
+async def test_add_flow_creates_the_device_and_its_subentry(hass: HomeAssistant, gateway: AiohttpClientMocker):
     gateway.post(f"{URL}/ha/devices", status=201, json={**BATTERY, "name": "Garage battery", "revision": 4})
     entry = paired_entry(hass)
-    r = await open_menu(hass, entry, "add_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": "battery"})
-    r = await hass.config_entries.options.async_configure(r["flow_id"], BATTERY_INPUT)
-    assert r["type"] is FlowResultType.ABORT and r["reason"] == "device_added"
-    assert r["description_placeholders"] == {"name": "Garage battery"}
+    r = await step(hass, await add_flow(hass, entry), {"kind": "battery"})
+    r = await step(hass, r, BATTERY_INPUT)
+    assert r["type"] is FlowResultType.CREATE_ENTRY and r["title"] == "Garage battery"
+    sub = subentry_of(entry, B)
+    assert (sub.subentry_type, sub.title, dict(sub.data)) == ("device", "Garage battery", {"kind": "battery", "revision": 4})
     assert sent(gateway, "post", "/ha/devices") == [
         {
             "kind": "battery",
@@ -514,24 +512,20 @@ async def test_add_flow_creates_a_device(hass: HomeAssistant, gateway: AiohttpCl
 async def test_add_flow_sends_times_choices_and_days_as_the_gateway_takes_them(hass: HomeAssistant, gateway: AiohttpClientMocker):
     gateway.post(f"{URL}/ha/devices", status=201, json={"id": B, "kind": "load", "name": "Dishwasher", "revision": 4})
     entry = paired_entry(hass)
-    r = await open_menu(hass, entry, "add_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": "load"})
+    r = await step(hass, await add_flow(hass, entry), {"kind": "load"})
     user = {"name": "Kitchen dishwasher", "label": " Dishwasher ", "switch": "switch.dw", "rated_w": 1800.0, "run_minutes": 90, "earliest": "22:30:00", "days": ["sat", "sun"]}
-    r = await hass.config_entries.options.async_configure(r["flow_id"], user)
-    assert r["type"] is FlowResultType.ABORT
+    r = await step(hass, r, user)
+    assert r["type"] is FlowResultType.CREATE_ENTRY
     body = sent(gateway, "post", "/ha/devices")[0]
     assert (body["name"], body["label"]) == ("Kitchen dishwasher", "Dishwasher")
     assert body["facts"] == {"rated_w": 1800, "run_minutes": 90, "earliest": "22:30", "days": ["sat", "sun"]}
 
     gateway.clear_requests()
     gateway.get(f"{URL}/device-types", json={"items": [], "hub_kinds": HUB_KINDS})
-    gateway.post(f"{URL}/ha/devices", status=201, json={"id": B, "kind": "ev-charger", "name": "Car", "revision": 5})
-    r = await open_menu(hass, entry, "add_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": "ev-charger"})
-    r = await hass.config_entries.options.async_configure(
-        r["flow_id"], {"name": "Car", "plugged_in": "binary_sensor.car", "charge_switch": "switch.car", "phases": "3"}
-    )
-    assert r["type"] is FlowResultType.ABORT
+    gateway.post(f"{URL}/ha/devices", status=201, json={"id": L, "kind": "ev-charger", "name": "Car", "revision": 5})
+    r = await step(hass, await add_flow(hass, entry), {"kind": "ev-charger"})
+    r = await step(hass, r, {"name": "Car", "plugged_in": "binary_sensor.car", "charge_switch": "switch.car", "phases": "3"})
+    assert r["type"] is FlowResultType.CREATE_ENTRY
     body = sent(gateway, "post", "/ha/devices")[0]
     assert body["facts"] == {"phases": 3} and "label" not in body
 
@@ -539,16 +533,16 @@ async def test_add_flow_sends_times_choices_and_days_as_the_gateway_takes_them(h
 async def test_a_422_names_the_field(hass: HomeAssistant, gateway: AiohttpClientMocker):
     gateway.post(f"{URL}/ha/devices", status=422, json={"detail": "power: sensor.bat_power must be device class power"})
     entry = paired_entry(hass)
-    r = await open_menu(hass, entry, "add_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": "battery"})
-    r = await hass.config_entries.options.async_configure(r["flow_id"], BATTERY_INPUT)
-    assert r["type"] is FlowResultType.FORM and r["step_id"] == "add_details"
+    r = await step(hass, await add_flow(hass, entry), {"kind": "battery"})
+    r = await step(hass, r, BATTERY_INPUT)
+    assert r["type"] is FlowResultType.FORM and r["step_id"] == "details"
     assert r["errors"] == {"power": "invalid_mapping"}
     assert r["description_placeholders"]["field"] == "Power (+ while charging)"
     # The label names the field, so the gateway's leading id is dropped from the reason.
     assert r["description_placeholders"]["detail"] == "sensor.bat_power must be device class power"
     # What was typed stays on the form.
     assert field(r, "name")[0].description == {"suggested_value": "Garage battery"}
+    assert not entry.subentries
 
 
 @pytest.mark.parametrize(
@@ -560,10 +554,8 @@ async def test_a_422_names_the_field(hass: HomeAssistant, gateway: AiohttpClient
 )
 async def test_a_422_without_a_field_prefix(hass: HomeAssistant, gateway: AiohttpClientMocker, detail, errors, placeholder):
     gateway.post(f"{URL}/ha/devices", status=422, json={"detail": detail})
-    entry = paired_entry(hass)
-    r = await open_menu(hass, entry, "add_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": "battery"})
-    r = await hass.config_entries.options.async_configure(r["flow_id"], BATTERY_INPUT)
+    r = await step(hass, await add_flow(hass, paired_entry(hass)), {"kind": "battery"})
+    r = await step(hass, r, BATTERY_INPUT)
     assert r["errors"] == errors
     assert (r["description_placeholders"]["field"], r["description_placeholders"]["detail"]) == placeholder
 
@@ -574,60 +566,123 @@ async def test_a_422_without_a_field_prefix(hass: HomeAssistant, gateway: Aiohtt
 )
 async def test_plan_limit_and_outage_show_on_the_form(hass: HomeAssistant, gateway: AiohttpClientMocker, status, body, key):
     gateway.post(f"{URL}/ha/devices", status=status, json=body)
-    entry = paired_entry(hass)
-    r = await open_menu(hass, entry, "add_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": "battery"})
-    r = await hass.config_entries.options.async_configure(r["flow_id"], BATTERY_INPUT)
+    r = await step(hass, await add_flow(hass, paired_entry(hass)), {"kind": "battery"})
+    r = await step(hass, r, BATTERY_INPUT)
     assert r["type"] is FlowResultType.FORM and r["errors"] == {"base": key}
 
 
-async def test_add_waits_for_the_new_device_list(hass: HomeAssistant, gateway: AiohttpClientMocker):
-    entry = await loaded_entry(hass, gateway)
-    created = {**BATTERY, "revision": 4}
+async def test_a_new_device_gets_its_ha_device_and_entities_under_its_subentry(hass: HomeAssistant, gateway: AiohttpClientMocker):
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
 
-    async def create(method, url, data):
-        # The retained list arrives a moment after the gateway answers.
-        hass.loop.call_later(0.05, entry.runtime_data.devices.offer, device_list(4, BATTERY))
-        return AiohttpClientMockResponse(method, url, status=201, json=created)
-
-    gateway.post(f"{URL}/ha/devices", side_effect=create)
-    r = await open_menu(hass, entry, "add_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": "battery"})
-    r = await hass.config_entries.options.async_configure(r["flow_id"], BATTERY_INPUT)
-    assert r["reason"] == "device_added"
-    assert entry.runtime_data.devices.revision == 4
-
-
-async def test_add_finishes_anyway_when_the_list_never_comes(hass: HomeAssistant, gateway: AiohttpClientMocker):
     entry = await loaded_entry(hass, gateway)
     gateway.post(f"{URL}/ha/devices", status=201, json={**BATTERY, "revision": 4})
-    with patch("custom_components.halfhour.config_flow.LIST_WAIT", 0.05):
-        r = await open_menu(hass, entry, "add_device")
-        r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": "battery"})
-        r = await hass.config_entries.options.async_configure(r["flow_id"], BATTERY_INPUT)
-    assert r["reason"] == "device_added"
-    assert entry.runtime_data.devices.revision == 3
+    r = await step(hass, await add_flow(hass, entry), {"kind": "battery"})
+    r = await step(hass, r, BATTERY_INPUT)
+    assert r["type"] is FlowResultType.CREATE_ENTRY
+    sub = subentry_of(entry, B)
+    entry.runtime_data.devices.offer(device_list(4, BATTERY))  # Halfhour's list follows the write
+    await hass.async_block_till_done()
+    assert [s.unique_id for s in entry.subentries.values()] == [B]  # the list didn't add a second one
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, f"{entry.entry_id}_{B}")})
+    assert device is not None and device.config_entries_subentries == {entry.entry_id: {sub.subentry_id}}
+    ent = er.async_get(hass).async_get("sensor.home_battery_controlled_by_halfhour")
+    assert ent is not None and ent.config_subentry_id == sub.subentry_id
+
+
+async def test_add_ends_without_a_second_subentry_when_the_list_came_first(hass: HomeAssistant, gateway: AiohttpClientMocker):
+    entry = await loaded_entry(hass, gateway)
+
+    async def create(method, url, data):
+        # The retained list arrives before the gateway's answer does.
+        entry.runtime_data.devices.offer(device_list(4, BATTERY))
+        return AiohttpClientMockResponse(method, url, status=201, json={**BATTERY, "revision": 4})
+
+    gateway.post(f"{URL}/ha/devices", side_effect=create)
+    r = await step(hass, await add_flow(hass, entry), {"kind": "battery"})
+    r = await step(hass, r, BATTERY_INPUT)
+    assert r["type"] is FlowResultType.ABORT and r["reason"] == "device_added"
+    assert r["description_placeholders"] == {"name": "Home battery"}
+    assert [s.unique_id for s in entry.subentries.values()] == [B]
+
+
+async def test_an_answer_without_an_id_leaves_the_subentry_to_the_list(hass: HomeAssistant, gateway: AiohttpClientMocker):
+    gateway.post(f"{URL}/ha/devices", status=201, json={"name": "Garage battery"})
+    entry = paired_entry(hass)
+    r = await step(hass, await add_flow(hass, entry), {"kind": "battery"})
+    r = await step(hass, r, BATTERY_INPUT)
+    assert r["type"] is FlowResultType.ABORT and r["reason"] == "device_added"
+    assert not entry.subentries
+
+
+async def test_a_subentry_newer_than_the_list_waits_for_the_list(hass: HomeAssistant, gateway: AiohttpClientMocker):
+    entry = await loaded_entry(hass, gateway, revision=2)
+    gateway.post(f"{URL}/ha/devices", status=201, json={**BATTERY, "revision": 4})
+    r = await step(hass, await add_flow(hass, entry), {"kind": "battery"})
+    await step(hass, r, BATTERY_INPUT)
+    devices = entry.runtime_data.devices
+    devices.offer(device_list(3))  # made before the device: says nothing about it
+    await hass.async_block_till_done()
+    assert [s.unique_id for s in entry.subentries.values()] == [B]
+    assert not sent(gateway, "delete", f"/ha/devices/{B}")  # not taken for a deletion
+    devices.offer(device_list(5))  # made after it, and it's gone: deleted elsewhere
+    await hass.async_block_till_done()
+    assert not entry.subentries
+    assert not sent(gateway, "delete", f"/ha/devices/{B}")
 
 
 async def test_edit_shows_the_current_device_and_sends_its_revision(hass: HomeAssistant, gateway: AiohttpClientMocker):
     entry = await loaded_entry(hass, gateway, BATTERY)
     gateway.put(f"{URL}/ha/devices/{B}", json={**BATTERY, "name": "Garage battery", "revision": 3})
-    r = await open_menu(hass, entry, "edit_device")
-    assert r["type"] is FlowResultType.FORM and r["step_id"] == "edit_device"
-    assert [(o["value"], o["label"]) for o in field(r, "device")[1].config["options"]] == [(B, "Home battery")]
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": B})
-    assert r["type"] is FlowResultType.FORM and r["step_id"] == "edit_details"
+    r = await edit_flow(hass, entry, B)
+    assert r["type"] is FlowResultType.FORM and r["step_id"] == "edit"
     assert r["description_placeholders"]["name"] == "Home battery"
     assert field(r, "name")[0].description == {"suggested_value": "Home battery"}
     assert field(r, "power")[0].description == {"suggested_value": "sensor.bat_power"}
     assert field(r, "power_invert")[0].description == {"suggested_value": True}
     assert field(r, "capacity_kwh")[0].description == {"suggested_value": 10}
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {**BATTERY_INPUT, "power_invert": False})
-    assert r["type"] is FlowResultType.ABORT and r["reason"] == "device_updated"
+    r = await step(hass, r, {**BATTERY_INPUT, "power_invert": False})
+    assert r["type"] is FlowResultType.ABORT and r["reason"] == "reconfigure_successful"
+    assert subentry_of(entry, B).title == "Home battery"  # the name is Halfhour's: its list retitles
+    entry.runtime_data.devices.offer(device_list(4, {**BATTERY, "name": "Garage battery"}))
+    assert subentry_of(entry, B).title == "Garage battery"
     (body,) = sent(gateway, "put", f"/ha/devices/{B}")
     assert body["revision"] == 3 and body["name"] == "Garage battery"
     assert body["mapping"]["power"] == {"entity_id": "sensor.bat_power", "invert": False}
     assert "kind" not in body
+
+
+async def test_edit_waits_for_the_new_device_list(hass: HomeAssistant, gateway: AiohttpClientMocker):
+    entry = await loaded_entry(hass, gateway, BATTERY)
+    renamed = {**BATTERY, "name": "Garage battery"}
+
+    async def update(method, url, data):
+        # The retained list arrives a moment after the gateway answers.
+        hass.loop.call_later(0.05, entry.runtime_data.devices.offer, device_list(4, renamed))
+        return AiohttpClientMockResponse(method, url, status=200, json={**renamed, "revision": 4})
+
+    gateway.put(f"{URL}/ha/devices/{B}", side_effect=update)
+    r = await step(hass, await edit_flow(hass, entry, B), BATTERY_INPUT)
+    assert r["reason"] == "reconfigure_successful"
+    assert entry.runtime_data.devices.revision == 4
+
+
+async def test_edit_finishes_anyway_when_the_list_never_comes(hass: HomeAssistant, gateway: AiohttpClientMocker):
+    entry = await loaded_entry(hass, gateway, BATTERY)
+    gateway.put(f"{URL}/ha/devices/{B}", json={**BATTERY, "revision": 4})
+    with patch("custom_components.halfhour.config_flow.LIST_WAIT", 0.05):
+        r = await step(hass, await edit_flow(hass, entry, B), BATTERY_INPUT)
+    assert r["reason"] == "reconfigure_successful"
+    assert entry.runtime_data.devices.revision == 3
+
+
+async def test_a_write_answer_without_a_revision_does_not_wait(hass: HomeAssistant, gateway: AiohttpClientMocker):
+    entry = await loaded_entry(hass, gateway, BATTERY)
+    gateway.put(f"{URL}/ha/devices/{B}", json={"id": B, "name": "Garage battery"})
+    with patch("custom_components.halfhour.config_flow.LIST_WAIT", 60):
+        r = await edit_flow(hass, entry, B)
+        r = await asyncio.wait_for(step(hass, r, BATTERY_INPUT), 1)
+    assert r["reason"] == "reconfigure_successful"
 
 
 async def test_edit_with_a_stale_revision_reshows_the_latest(hass: HomeAssistant, gateway: AiohttpClientMocker):
@@ -642,63 +697,29 @@ async def test_edit_with_a_stale_revision_reshows_the_latest(hass: HomeAssistant
         return answers.pop(0)
 
     gateway.put(f"{URL}/ha/devices/{B}", side_effect=put)
-    r = await open_menu(hass, entry, "edit_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": B})
-    r = await hass.config_entries.options.async_configure(r["flow_id"], BATTERY_INPUT)
-    assert r["type"] is FlowResultType.FORM and r["step_id"] == "edit_details"
+    r = await step(hass, await edit_flow(hass, entry, B), BATTERY_INPUT)
+    assert r["type"] is FlowResultType.FORM and r["step_id"] == "edit"
     assert r["errors"] == {"base": "stale_revision"}
     assert field(r, "name")[0].description == {"suggested_value": "Renamed on the web"}
     assert field(r, "capacity_kwh")[0].description == {"suggested_value": 13.5}
     with patch("custom_components.halfhour.config_flow.LIST_WAIT", 0.05):
-        r = await hass.config_entries.options.async_configure(r["flow_id"], {**BATTERY_INPUT, "name": "Renamed on the web"})
-    assert r["reason"] == "device_updated"
+        r = await step(hass, r, {**BATTERY_INPUT, "name": "Renamed on the web"})
+    assert r["reason"] == "reconfigure_successful"
     assert [b["revision"] for b in sent(gateway, "put", f"/ha/devices/{B}")] == [3, 5]
 
 
 async def test_edit_of_a_device_deleted_elsewhere_aborts(hass: HomeAssistant, gateway: AiohttpClientMocker):
     entry = await loaded_entry(hass, gateway, BATTERY)
     gateway.put(f"{URL}/ha/devices/{B}", status=404, json={"detail": "no such device"})
-    r = await open_menu(hass, entry, "edit_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": B})
-    r = await hass.config_entries.options.async_configure(r["flow_id"], BATTERY_INPUT)
+    r = await step(hass, await edit_flow(hass, entry, B), BATTERY_INPUT)
     assert r["type"] is FlowResultType.ABORT and r["reason"] == "not_found"
 
 
 async def test_edit_of_a_kind_the_gateway_no_longer_serves_aborts(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker):
     entry = await loaded_entry(hass, aioclient_mock, BATTERY)
     aioclient_mock.get(f"{URL}/device-types", json={"items": [], "hub_kinds": [k for k in HUB_KINDS if k["kind"] != "battery"]})
-    r = await open_menu(hass, entry, "edit_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": B})
+    r = await edit_flow(hass, entry, B)
     assert r["type"] is FlowResultType.ABORT and r["reason"] == "unknown_kind"
-
-
-async def test_remove_deletes_the_device(hass: HomeAssistant, gateway: AiohttpClientMocker):
-    entry = await loaded_entry(hass, gateway, BATTERY)
-
-    async def delete(method, url, data):
-        hass.loop.call_later(0.05, entry.runtime_data.devices.offer, device_list(4))
-        return AiohttpClientMockResponse(method, url, status=204)
-
-    gateway.delete(f"{URL}/ha/devices/{B}", side_effect=delete)
-    r = await open_menu(hass, entry, "remove_device")
-    assert r["type"] is FlowResultType.FORM and r["step_id"] == "remove_device"
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": B})
-    assert r["type"] is FlowResultType.ABORT and r["reason"] == "device_removed"
-    assert r["description_placeholders"] == {"name": "Home battery"}
-    assert len(sent(gateway, "delete", f"/ha/devices/{B}")) == 1
-    assert entry.runtime_data.devices.device(B) is None
-
-
-@pytest.mark.parametrize(("status", "outcome"), [(404, ("abort", "not_found")), (503, ("form", "cannot_connect"))])
-async def test_remove_errors(hass: HomeAssistant, gateway: AiohttpClientMocker, status, outcome):
-    entry = await loaded_entry(hass, gateway, BATTERY)
-    gateway.delete(f"{URL}/ha/devices/{B}", status=status, json={"detail": "x"})
-    r = await open_menu(hass, entry, "remove_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": B})
-    if outcome[0] == "abort":
-        assert r["type"] is FlowResultType.ABORT and r["reason"] == outcome[1]
-    else:
-        assert r["type"] is FlowResultType.FORM and r["errors"] == {"base": outcome[1]}
 
 
 @pytest.mark.parametrize(
@@ -708,44 +729,37 @@ async def test_remove_errors(hass: HomeAssistant, gateway: AiohttpClientMocker, 
 async def test_edit_errors_show_on_the_form(hass: HomeAssistant, gateway: AiohttpClientMocker, status, body, errors):
     entry = await loaded_entry(hass, gateway, BATTERY)
     gateway.put(f"{URL}/ha/devices/{B}", status=status, json=body)
-    r = await open_menu(hass, entry, "edit_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": B})
-    r = await hass.config_entries.options.async_configure(r["flow_id"], BATTERY_INPUT)
-    assert r["type"] is FlowResultType.FORM and r["step_id"] == "edit_details" and r["errors"] == errors
+    r = await step(hass, await edit_flow(hass, entry, B), BATTERY_INPUT)
+    assert r["type"] is FlowResultType.FORM and r["step_id"] == "edit" and r["errors"] == errors
 
 
-async def test_edit_aborts_when_the_kinds_cannot_be_read(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker):
+@pytest.mark.parametrize(("served", "reason"), [({"json": {"items": []}}, "gateway_too_old"), ({"status": 503}, "cannot_connect")])
+async def test_edit_aborts_when_the_kinds_cannot_be_read(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, served, reason):
     entry = await loaded_entry(hass, aioclient_mock, BATTERY)
-    aioclient_mock.get(f"{URL}/device-types", json={"items": []})  # no hub_kinds
-    r = await open_menu(hass, entry, "edit_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": B})
-    assert r["type"] is FlowResultType.ABORT and r["reason"] == "gateway_too_old"
+    aioclient_mock.get(f"{URL}/device-types", **served)
+    r = await edit_flow(hass, entry, B)
+    assert r["type"] is FlowResultType.ABORT and r["reason"] == reason
 
 
-async def test_edit_aborts_when_the_gateway_cannot_be_reached(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker):
-    entry = await loaded_entry(hass, aioclient_mock, BATTERY)
-    aioclient_mock.get(f"{URL}/device-types", status=503)
-    r = await open_menu(hass, entry, "edit_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": B})
-    assert r["type"] is FlowResultType.ABORT and r["reason"] == "cannot_connect"
-
-
-async def test_edit_of_a_device_gone_from_the_list_since_the_menu_aborts(hass: HomeAssistant, gateway: AiohttpClientMocker):
-    entry = await loaded_entry(hass, gateway, BATTERY)
-    r = await open_menu(hass, entry, "edit_device")
-    entry.runtime_data.devices.offer(device_list(4))
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": B})
+async def test_edit_of_a_device_not_in_the_held_list_aborts(hass: HomeAssistant, gateway: AiohttpClientMocker):
+    entry = await loaded_entry(hass, gateway, revision=2)
+    gateway.post(f"{URL}/ha/devices", status=201, json={**BATTERY, "revision": 4})
+    await step(hass, await step(hass, await add_flow(hass, entry), {"kind": "battery"}), BATTERY_INPUT)  # its list not here yet
+    r = await edit_flow(hass, entry, B)
     assert r["type"] is FlowResultType.ABORT and r["reason"] == "not_found"
 
 
-async def test_a_write_answer_without_a_revision_does_not_wait(hass: HomeAssistant, gateway: AiohttpClientMocker):
-    entry = await loaded_entry(hass, gateway)
-    gateway.post(f"{URL}/ha/devices", status=201, json={"id": B, "name": "Garage battery"})
-    with patch("custom_components.halfhour.config_flow.LIST_WAIT", 60):
-        r = await open_menu(hass, entry, "add_device")
-        r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": "battery"})
-        r = await asyncio.wait_for(hass.config_entries.options.async_configure(r["flow_id"], BATTERY_INPUT), 1)
-    assert r["reason"] == "device_added"
+async def test_edit_while_the_entry_is_not_running_aborts(hass: HomeAssistant, gateway: AiohttpClientMocker):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="hub-1",
+        data={CONF_URL: "https://hh.test", CONF_TOKEN: "t", CONF_HUB_ID: "hub-1"},
+        options={CONF_MAPPING: {}, CONF_ROLES: ROLES},
+        subentries_data=[ConfigSubentryData(data={"kind": "battery", "revision": 3}, subentry_type="device", title="Home battery", unique_id=B)],
+    )
+    entry.add_to_hass(hass)
+    r = await edit_flow(hass, entry, B)
+    assert r["type"] is FlowResultType.ABORT and r["reason"] == "not_loaded"
 
 
 L = "3f2a0000-0000-4000-8000-00000000000c"
@@ -755,14 +769,11 @@ DISHWASHER = {"id": L, "kind": "load", "name": "Kitchen dishwasher", "label": "D
 async def test_edit_a_loads_label(hass: HomeAssistant, gateway: AiohttpClientMocker):
     entry = await loaded_entry(hass, gateway, DISHWASHER)
     gateway.put(f"{URL}/ha/devices/{L}", json={**DISHWASHER, "label": "Dish washer", "revision": 4})
-    r = await open_menu(hass, entry, "edit_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": L})
+    r = await edit_flow(hass, entry, L)
     assert field(r, "label")[0].description == {"suggested_value": "Dishwasher"}
     with patch("custom_components.halfhour.config_flow.LIST_WAIT", 0.05):
-        r = await hass.config_entries.options.async_configure(
-            r["flow_id"], {"name": "Kitchen dishwasher", "label": "Dish washer", "switch": "switch.dw", "rated_w": 1800, "run_minutes": 90}
-        )
-    assert r["reason"] == "device_updated"
+        r = await step(hass, r, {"name": "Kitchen dishwasher", "label": "Dish washer", "switch": "switch.dw", "rated_w": 1800, "run_minutes": 90})
+    assert r["reason"] == "reconfigure_successful"
     assert sent(gateway, "put", f"/ha/devices/{L}")[0]["label"] == "Dish washer"
 
 
@@ -770,19 +781,16 @@ async def test_a_stale_edit_of_a_load_shows_the_latest_label(hass: HomeAssistant
     entry = await loaded_entry(hass, gateway, DISHWASHER)
     latest = {**DISHWASHER, "label": "Renamed", "revision": 5}
     gateway.put(f"{URL}/ha/devices/{L}", status=409, json={"detail": "changed", "device": latest})
-    r = await open_menu(hass, entry, "edit_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"device": L})
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"name": "Kitchen dishwasher", "switch": "switch.dw", "rated_w": 1800, "run_minutes": 90})
+    r = await edit_flow(hass, entry, L)
+    r = await step(hass, r, {"name": "Kitchen dishwasher", "switch": "switch.dw", "rated_w": 1800, "run_minutes": 90})
     assert r["errors"] == {"base": "stale_revision"}
     assert field(r, "label")[0].description == {"suggested_value": "Renamed"}
 
 
 async def test_a_422_on_the_label(hass: HomeAssistant, gateway: AiohttpClientMocker):
     gateway.post(f"{URL}/ha/devices", status=422, json={"detail": "label must be 1-60 characters"})
-    entry = paired_entry(hass)
-    r = await open_menu(hass, entry, "add_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": "load"})
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"name": "Dishwasher", "label": "x" * 61, "switch": "switch.dw", "rated_w": 1800, "run_minutes": 90})
+    r = await step(hass, await add_flow(hass, paired_entry(hass)), {"kind": "load"})
+    r = await step(hass, r, {"name": "Dishwasher", "label": "x" * 61, "switch": "switch.dw", "rated_w": 1800, "run_minutes": 90})
     assert r["type"] is FlowResultType.FORM and r["errors"] == {"label": "invalid_mapping"}
     assert (r["description_placeholders"]["field"], r["description_placeholders"]["detail"]) == ("Label", "must be 1-60 characters")
 
@@ -794,8 +802,18 @@ async def test_a_kind_withdrawn_since_the_form_was_shown_is_an_error(hass: HomeA
         return AiohttpClientMockResponse(method, url, json=served.pop(0))
 
     aioclient_mock.get(f"{URL}/device-types", side_effect=device_types)
-    entry = paired_entry(hass)
-    r = await open_menu(hass, entry, "add_device")
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"kind": "load"})
-    assert r["type"] is FlowResultType.FORM and r["step_id"] == "add_device"
+    r = await step(hass, await add_flow(hass, paired_entry(hass)), {"kind": "load"})
+    assert r["type"] is FlowResultType.FORM and r["step_id"] == "user"
     assert r["errors"] == {"kind": "kind_unavailable"}
+
+
+async def test_edit_of_a_subentry_deleted_while_saving_aborts(hass: HomeAssistant, gateway: AiohttpClientMocker):
+    entry = await loaded_entry(hass, gateway, BATTERY)
+
+    async def update(method, url, data):
+        entry.runtime_data.devices.offer(device_list(4))  # deleted in Halfhour meanwhile
+        return AiohttpClientMockResponse(method, url, status=200, json={**BATTERY, "revision": 4})
+
+    gateway.put(f"{URL}/ha/devices/{B}", side_effect=update)
+    r = await step(hass, await edit_flow(hass, entry, B), BATTERY_INPUT)
+    assert r["type"] is FlowResultType.ABORT and r["reason"] == "not_found"

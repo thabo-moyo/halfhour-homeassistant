@@ -17,15 +17,17 @@ rules:
   config-flow:
     status: done
     comment: >-
-      Pairing, then the sensors step. Options is a menu: the sensors step, and
-      add, edit and remove a device behind this home. The device forms are
-      built from the kind schema Halfhour serves (GET /device-types); every
+      Pairing, then the sensors step; options are the sensors step. Each
+      device behind this home is a config subentry: Add device and
+      Reconfigure use forms built from the kind schema Halfhour serves (GET
+      /device-types), and deleting one deletes the device in Halfhour. Every
       field has data_description.
   config-flow-test-coverage:
     status: done
     comment: >-
-      Every step, error and abort, including the device forms against a mocked
-      gateway (422 on the named field, plan limit, stale revision, not found).
+      Every step, error and abort, including the device subentry flows against
+      a mocked gateway (422 on the named field, plan limit, stale revision,
+      not found, entry not loaded).
   dependency-transparency:
     status: done
     comment: >-

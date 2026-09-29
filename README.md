@@ -60,7 +60,7 @@ Copy `custom_components/halfhour` into your Home Assistant config's
 ## Configuration options
 
 The sensor choices can be changed at any time from the integration's
-**Configure → Choose your sensors**. Each reading takes one sensor:
+**Configure**. Each reading takes one sensor:
 
 | Field | What to pick |
 |---|---|
@@ -100,35 +100,39 @@ fresh pairing code; your sensor choices and entities are kept.
 
 Besides the house readings, Halfhour can follow individual devices that Home
 Assistant already reads: a home battery, solar, an EV charger or a load (an
-immersion heater, a dishwasher). Each one becomes a device in Halfhour and,
-under the **Halfhour** device, a device in Home Assistant with its readings
-and a diagnostic **Controlled by Halfhour** sensor.
+immersion heater, a dishwasher). Each one is its own entry under Halfhour on
+the integration's page (a config subentry), with a device in Home Assistant
+holding its readings and a diagnostic **Controlled by Halfhour** sensor.
 
 **Monitor only.** In this version Halfhour only reads these devices. Some
 forms ask for a switch or setpoint entity (a battery's grid setpoint, a
 charger's charge switch, a load's switch): Halfhour stores it for when
 control arrives, but never switches or sets anything yet.
 
-Add, edit or remove them from the integration's **Configure**, which opens a
-menu:
+On the integration's page (**Settings → Devices & services → Halfhour**):
 
-- **Choose your sensors**: the house readings, as above.
-- **Add a device**: pick the kind, then an entity for each reading and the
+- **Add device**: pick the kind, then an entity for each reading and the
   facts Halfhour needs (a battery's capacity and charge limits, a load's
   rated power and run time, and so on). The kinds, fields, ranges and
   units all come from Halfhour, so the form always matches what Halfhour
   accepts. The pickers list entities of the right domain; Halfhour checks
   the device class and unit when you save and marks the field it refuses.
-- **Edit a device** / **Remove a device**: pick one of the devices behind
-  this home. A field left empty on edit is removed. If the device was
-  changed in Halfhour while you were editing, the form shows the latest
-  version to check and save again.
+- **⋮ → Reconfigure** on a device: change its name, entities or facts. A
+  field left empty is removed. If the device was changed in Halfhour while
+  you were editing, the form shows the latest version to check and save
+  again.
+- **⋮ → Delete** on a device: removes it from Halfhour too. If Halfhour
+  can't be reached, the device stays hidden here and the removal is retried
+  until Halfhour confirms it.
 - A **load** also takes an optional label saying what it is (Dishwasher,
   Immersion heater); on a load's days, leaving them all empty means every day.
 - A device that **needs attention** (an entity it uses no longer exists in
   Home Assistant) can only be saved from Home Assistant once that entity is
   re-picked, even to change just its facts: the form always sends the
   entities, and Halfhour refuses one it can't find.
+
+A new device's latest finished half-hour is sent within a minute of adding
+it; its history (up to 360 days) follows, oldest first.
 
 Devices can also be added from Halfhour (**Devices → Home Assistant → Add
 device**); both work on the same list. A change appears in Home Assistant

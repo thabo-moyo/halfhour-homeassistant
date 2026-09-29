@@ -64,6 +64,11 @@ def _slot_start(slot: dict[str, Any]) -> datetime:
     return datetime.fromisoformat(slot["slot"])
 
 
+def _first_open(now: datetime) -> datetime:
+    """The first slot not yet final: at 12:07 that is 11:30 (it ends at 12:00, final at 12:10)."""
+    return slot_floor(now - SLOT - FINAL_AFTER) + SLOT
+
+
 def role_kind(m: dict[str, Any]) -> Kind:
     """A mapping entry's kind; 0.1.x entries carry only a unit."""
     kind = m.get("kind") or ("percent" if m.get("unit") == "%" else "power")
@@ -108,6 +113,7 @@ class HalfhourSync:
         self._backoff = 0
         self._next_try: datetime | None = None
         self._syncing = False
+        self._started = False
         self._stopped = False
         self._last_send: datetime | None = None  # when the last request went out, for pacing
         self._auth_failed = False
@@ -131,8 +137,14 @@ class HalfhourSync:
 
     @callback
     def async_device_list_changed(self) -> None:
-        """A new device list: it says which device roles exist, so send them all again."""
+        """A new device list: it says which device roles exist, so send them all again.
+
+        A new device's readings go soon, not at the next tick: its first
+        request carries its latest finished half-hour (see _collect).
+        """
         self._dropped.clear()
+        if self._started and self._later is None and not self._stopped and any(role.startswith("dev.") and role not in self._cursors for role in self._mapping()):
+            self.entry.async_create_background_task(self.hass, self.async_sync(), "halfhour sync for a new device")
 
     @property
     def cursors(self) -> Cursors:
@@ -219,6 +231,7 @@ class HalfhourSync:
     @callback
     def async_start(self) -> None:
         """Sync now, then every SYNC_INTERVAL, SYNC_OFFSET after a 5-minute boundary."""
+        self._started = True
         self.entry.async_create_background_task(self.hass, self.async_sync(), "halfhour first sync")
         now = dt_util.utcnow()
         boundary = now - timedelta(minutes=now.minute % 5, seconds=now.second, microseconds=now.microsecond)
@@ -363,12 +376,25 @@ class HalfhourSync:
         done: dict[str, tuple[dict[str, Any], datetime, datetime]] = {}
         slots: list[dict[str, Any]] = []
         window = self._window()
+        latest = _first_open(now) - SLOT  # the newest finished slot
+        heads: list[tuple[str, dict[str, Any]]] = []
         for role, m in mapping.items():
             cursor = self._cursor(role, m)
             end = min(cursor + window, now)
             role_slots, through = await self._role_slots(role, m["entity_id"], role_kind(m), bool(m.get("invert", False)), cursor, end, now)
             done[role] = (m, cursor, through)
             slots.extend(role_slots)
+            if role.startswith("dev.") and role not in self._cursors and end <= latest:
+                heads.append((role, m))
+        # A new device backfills a year, oldest first: its latest reading
+        # would take many requests to reach. Send that one now as well; the
+        # backfill sends it again when it gets there (Halfhour keeps the last).
+        # Only while the role has no cursor: one that doesn't fit this batch
+        # isn't tried again, and the reading waits for the backfill instead.
+        for role, m in heads:
+            head, _ = await self._role_slots(role, m["entity_id"], role_kind(m), bool(m.get("invert", False)), latest, latest + SLOT, now)
+            if len(slots) + len(head) <= MAX_BATCH:
+                slots.extend(head)
         return done, slots
 
     async def _role_slots(
@@ -405,8 +431,7 @@ class HalfhourSync:
     @callback
     def _move(self, done: dict[str, tuple[dict[str, Any], datetime, datetime]], now: datetime) -> None:
         """Advance each role's cursor past what its window covered, never past the first open slot."""
-        # The first slot not yet final: at 12:07 that is 11:30 (it ends at 12:00, final at 12:10).
-        first_open = slot_floor(now - SLOT - FINAL_AFTER) + SLOT
+        first_open = _first_open(now)
         cursors: Cursors = {}
         for role, (m, old, through) in done.items():
             new = max(old, min(through, first_open))

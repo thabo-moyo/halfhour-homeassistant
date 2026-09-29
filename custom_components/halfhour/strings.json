@@ -83,18 +83,170 @@
       "reconfigure_successful": "Halfhour address changed. Uploads will resume."
     }
   },
+  "config_subentries": {
+    "device": {
+      "entry_type": "Device",
+      "initiate_flow": {
+        "user": "Add device",
+        "reconfigure": "Edit device"
+      },
+      "step": {
+        "user": {
+          "title": "Add a device",
+          "description": "Add a device that Home Assistant already reads, such as a battery, solar, an EV charger or a load, so Halfhour can follow it. Halfhour only monitors devices in this version.",
+          "data": {
+            "kind": "Kind of device"
+          },
+          "data_description": {
+            "kind": "What the device is. The choices come from Halfhour."
+          }
+        },
+        "details": {
+          "title": "Add {kind}",
+          "description": "Pick the Home Assistant entity for each reading, and fill in the facts about the device. The entities must be in the list Home Assistant last sent Halfhour: a new entity can take a minute to appear.",
+          "data": {
+            "name": "Name",
+            "label": "What it is",
+            "soc": "Charge level",
+            "power": "Power",
+            "power_invert": "Power reversed",
+            "energy": "Energy total",
+            "grid_setpoint": "Grid setpoint",
+            "floor": "Reserve floor",
+            "plugged_in": "Plugged in",
+            "car_soc": "Car charge level",
+            "charge_switch": "Charge switch",
+            "current": "Charge current",
+            "switch": "Switch",
+            "capacity_kwh": "Usable capacity",
+            "max_charge_w": "Max charge power",
+            "max_discharge_w": "Max discharge power",
+            "floor_pct": "Reserve floor (no floor entity)",
+            "kwp": "Panel capacity",
+            "min_amps": "Minimum current",
+            "max_amps": "Maximum current",
+            "phases": "Phases",
+            "voltage": "Supply voltage",
+            "rated_w": "Rated power",
+            "run_minutes": "Run time",
+            "earliest": "Earliest start",
+            "done_by": "Done by",
+            "days": "Days"
+          },
+          "data_description": {
+            "name": "What to call this device in Halfhour and Home Assistant.",
+            "label": "Loads only: what the load is, for example Dishwasher or Immersion heater. Optional.",
+            "soc": "A battery-level sensor (%).",
+            "power": "A power sensor (W or kW). For a battery, positive while charging.",
+            "power_invert": "Turn on if this sensor counts the other way (for example a battery negative while charging).",
+            "energy": "An energy counter (kWh, state class total_increasing). Solar needs power, energy or both.",
+            "grid_setpoint": "A number entity (W) that sets the inverter's grid setpoint. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
+            "floor": "A number or sensor (%) holding the battery's reserve floor. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
+            "plugged_in": "A binary sensor that is on while the car is plugged in.",
+            "car_soc": "The car's battery-level sensor (%), if you have one.",
+            "charge_switch": "The switch that starts and stops charging. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
+            "current": "A number entity (A) that sets the charge current. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
+            "switch": "The switch or toggle helper that runs this load. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
+            "capacity_kwh": "How much energy the battery can store and give back, in kWh.",
+            "max_charge_w": "The highest power the battery charges at, in W.",
+            "max_discharge_w": "The highest power the battery discharges at, in W.",
+            "floor_pct": "The lowest charge level to keep, when no reserve floor entity is picked.",
+            "kwp": "The panels' peak rating, in kWp.",
+            "min_amps": "The lowest current the charger can run at.",
+            "max_amps": "The highest current the charger can run at.",
+            "phases": "How many phases the charger uses.",
+            "voltage": "The supply voltage, usually 230 V.",
+            "rated_w": "How much power the load draws while running, in W.",
+            "run_minutes": "How long one run takes, in minutes.",
+            "earliest": "The earliest time a run may start.",
+            "done_by": "The time a run must be finished by.",
+            "days": "The days the load may run. Leave empty for every day."
+          }
+        },
+        "edit": {
+          "title": "Edit {name}",
+          "description": "Change the entities or facts for this {kind}. A field left empty is removed.",
+          "data": {
+            "name": "Name",
+            "label": "What it is",
+            "soc": "Charge level",
+            "power": "Power",
+            "power_invert": "Power reversed",
+            "energy": "Energy total",
+            "grid_setpoint": "Grid setpoint",
+            "floor": "Reserve floor",
+            "plugged_in": "Plugged in",
+            "car_soc": "Car charge level",
+            "charge_switch": "Charge switch",
+            "current": "Charge current",
+            "switch": "Switch",
+            "capacity_kwh": "Usable capacity",
+            "max_charge_w": "Max charge power",
+            "max_discharge_w": "Max discharge power",
+            "floor_pct": "Reserve floor (no floor entity)",
+            "kwp": "Panel capacity",
+            "min_amps": "Minimum current",
+            "max_amps": "Maximum current",
+            "phases": "Phases",
+            "voltage": "Supply voltage",
+            "rated_w": "Rated power",
+            "run_minutes": "Run time",
+            "earliest": "Earliest start",
+            "done_by": "Done by",
+            "days": "Days"
+          },
+          "data_description": {
+            "name": "What to call this device in Halfhour and Home Assistant.",
+            "label": "Loads only: what the load is, for example Dishwasher or Immersion heater. Optional.",
+            "soc": "A battery-level sensor (%).",
+            "power": "A power sensor (W or kW). For a battery, positive while charging.",
+            "power_invert": "Turn on if this sensor counts the other way (for example a battery negative while charging).",
+            "energy": "An energy counter (kWh, state class total_increasing). Solar needs power, energy or both.",
+            "grid_setpoint": "A number entity (W) that sets the inverter's grid setpoint. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
+            "floor": "A number or sensor (%) holding the battery's reserve floor. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
+            "plugged_in": "A binary sensor that is on while the car is plugged in.",
+            "car_soc": "The car's battery-level sensor (%), if you have one.",
+            "charge_switch": "The switch that starts and stops charging. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
+            "current": "A number entity (A) that sets the charge current. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
+            "switch": "The switch or toggle helper that runs this load. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
+            "capacity_kwh": "How much energy the battery can store and give back, in kWh.",
+            "max_charge_w": "The highest power the battery charges at, in W.",
+            "max_discharge_w": "The highest power the battery discharges at, in W.",
+            "floor_pct": "The lowest charge level to keep, when no reserve floor entity is picked.",
+            "kwp": "The panels' peak rating, in kWp.",
+            "min_amps": "The lowest current the charger can run at.",
+            "max_amps": "The highest current the charger can run at.",
+            "phases": "How many phases the charger uses.",
+            "voltage": "The supply voltage, usually 230 V.",
+            "rated_w": "How much power the load draws while running, in W.",
+            "run_minutes": "How long one run takes, in minutes.",
+            "earliest": "The earliest time a run may start.",
+            "done_by": "The time a run must be finished by.",
+            "days": "The days the load may run. Leave empty for every day."
+          }
+        }
+      },
+      "error": {
+        "invalid_mapping": "Halfhour refused {field}: {detail}",
+        "device_limit": "Your Halfhour plan has no free device slot. Remove a device or change plan in Halfhour, then try again.",
+        "stale_revision": "This device was changed elsewhere while you edited it. The form now shows the latest version: check it and save again.",
+        "cannot_connect": "Couldn't reach Halfhour. Try again.",
+        "kind_unavailable": "Halfhour no longer offers this kind of device. Pick another."
+      },
+      "abort": {
+        "cannot_connect": "Couldn't reach Halfhour. Try again later.",
+        "not_found": "That device is no longer in Halfhour. It was removed elsewhere.",
+        "unknown_kind": "Halfhour no longer offers this kind of device. Remove it and add it again.",
+        "device_added": "{name} was added. Its readings appear in Home Assistant within a few seconds.",
+        "gateway_too_old": "This Halfhour server is too old for devices behind Home Assistant. Try again once it has been updated.",
+        "not_loaded": "Halfhour isn't running for this home right now. Try again once it has started.",
+        "reconfigure_successful": "The device was saved."
+      }
+    }
+  },
   "options": {
     "step": {
       "init": {
-        "title": "Halfhour options",
-        "menu_options": {
-          "sensors": "Choose your sensors",
-          "add_device": "Add a device",
-          "edit_device": "Edit a device",
-          "remove_device": "Remove a device"
-        }
-      },
-      "sensors": {
         "title": "Choose your sensors",
         "data": {
           "house_load_w": "House load",
@@ -127,177 +279,10 @@
           "battery_power_w_invert": "Turn on if this sensor counts the other way.",
           "battery_soc_pct": "A battery state-of-charge sensor (%) with statistics."
         }
-      },
-      "add_device": {
-        "title": "Add a device",
-        "description": "Add a device that Home Assistant already reads, such as a battery, solar, an EV charger or a load, so Halfhour can follow it. Halfhour only monitors devices in this version.",
-        "data": {
-          "kind": "Kind of device"
-        },
-        "data_description": {
-          "kind": "What the device is. The choices come from Halfhour."
-        }
-      },
-      "add_details": {
-        "title": "Add {kind}",
-        "description": "Pick the Home Assistant entity for each reading, and fill in the facts about the device. The entities must be in the list Home Assistant last sent Halfhour: a new entity can take a minute to appear.",
-        "data": {
-          "name": "Name",
-          "label": "What it is",
-          "soc": "Charge level",
-          "power": "Power",
-          "power_invert": "Power reversed",
-          "energy": "Energy total",
-          "grid_setpoint": "Grid setpoint",
-          "floor": "Reserve floor",
-          "plugged_in": "Plugged in",
-          "car_soc": "Car charge level",
-          "charge_switch": "Charge switch",
-          "current": "Charge current",
-          "switch": "Switch",
-          "capacity_kwh": "Usable capacity",
-          "max_charge_w": "Max charge power",
-          "max_discharge_w": "Max discharge power",
-          "floor_pct": "Reserve floor (no floor entity)",
-          "kwp": "Panel capacity",
-          "min_amps": "Minimum current",
-          "max_amps": "Maximum current",
-          "phases": "Phases",
-          "voltage": "Supply voltage",
-          "rated_w": "Rated power",
-          "run_minutes": "Run time",
-          "earliest": "Earliest start",
-          "done_by": "Done by",
-          "days": "Days"
-        },
-        "data_description": {
-          "name": "What to call this device in Halfhour and Home Assistant.",
-          "label": "Loads only: what the load is, for example Dishwasher or Immersion heater. Optional.",
-          "soc": "A battery-level sensor (%).",
-          "power": "A power sensor (W or kW). For a battery, positive while charging.",
-          "power_invert": "Turn on if this sensor counts the other way (for example a battery negative while charging).",
-          "energy": "An energy counter (kWh, state class total_increasing). Solar needs power, energy or both.",
-          "grid_setpoint": "A number entity (W) that sets the inverter's grid setpoint. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
-          "floor": "A number or sensor (%) holding the battery's reserve floor. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
-          "plugged_in": "A binary sensor that is on while the car is plugged in.",
-          "car_soc": "The car's battery-level sensor (%), if you have one.",
-          "charge_switch": "The switch that starts and stops charging. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
-          "current": "A number entity (A) that sets the charge current. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
-          "switch": "The switch or toggle helper that runs this load. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
-          "capacity_kwh": "How much energy the battery can store and give back, in kWh.",
-          "max_charge_w": "The highest power the battery charges at, in W.",
-          "max_discharge_w": "The highest power the battery discharges at, in W.",
-          "floor_pct": "The lowest charge level to keep, when no reserve floor entity is picked.",
-          "kwp": "The panels' peak rating, in kWp.",
-          "min_amps": "The lowest current the charger can run at.",
-          "max_amps": "The highest current the charger can run at.",
-          "phases": "How many phases the charger uses.",
-          "voltage": "The supply voltage, usually 230 V.",
-          "rated_w": "How much power the load draws while running, in W.",
-          "run_minutes": "How long one run takes, in minutes.",
-          "earliest": "The earliest time a run may start.",
-          "done_by": "The time a run must be finished by.",
-          "days": "The days the load may run. Leave empty for every day."
-        }
-      },
-      "edit_device": {
-        "title": "Edit a device",
-        "data": {
-          "device": "Device"
-        },
-        "data_description": {
-          "device": "One of the devices behind this home in Halfhour."
-        }
-      },
-      "edit_details": {
-        "title": "Edit {name}",
-        "description": "Change the entities or facts for this {kind}. A field left empty is removed.",
-        "data": {
-          "name": "Name",
-          "label": "What it is",
-          "soc": "Charge level",
-          "power": "Power",
-          "power_invert": "Power reversed",
-          "energy": "Energy total",
-          "grid_setpoint": "Grid setpoint",
-          "floor": "Reserve floor",
-          "plugged_in": "Plugged in",
-          "car_soc": "Car charge level",
-          "charge_switch": "Charge switch",
-          "current": "Charge current",
-          "switch": "Switch",
-          "capacity_kwh": "Usable capacity",
-          "max_charge_w": "Max charge power",
-          "max_discharge_w": "Max discharge power",
-          "floor_pct": "Reserve floor (no floor entity)",
-          "kwp": "Panel capacity",
-          "min_amps": "Minimum current",
-          "max_amps": "Maximum current",
-          "phases": "Phases",
-          "voltage": "Supply voltage",
-          "rated_w": "Rated power",
-          "run_minutes": "Run time",
-          "earliest": "Earliest start",
-          "done_by": "Done by",
-          "days": "Days"
-        },
-        "data_description": {
-          "name": "What to call this device in Halfhour and Home Assistant.",
-          "label": "Loads only: what the load is, for example Dishwasher or Immersion heater. Optional.",
-          "soc": "A battery-level sensor (%).",
-          "power": "A power sensor (W or kW). For a battery, positive while charging.",
-          "power_invert": "Turn on if this sensor counts the other way (for example a battery negative while charging).",
-          "energy": "An energy counter (kWh, state class total_increasing). Solar needs power, energy or both.",
-          "grid_setpoint": "A number entity (W) that sets the inverter's grid setpoint. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
-          "floor": "A number or sensor (%) holding the battery's reserve floor. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
-          "plugged_in": "A binary sensor that is on while the car is plugged in.",
-          "car_soc": "The car's battery-level sensor (%), if you have one.",
-          "charge_switch": "The switch that starts and stops charging. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
-          "current": "A number entity (A) that sets the charge current. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
-          "switch": "The switch or toggle helper that runs this load. Halfhour only monitors devices in this version: nothing is switched or set yet. It is kept for when control arrives.",
-          "capacity_kwh": "How much energy the battery can store and give back, in kWh.",
-          "max_charge_w": "The highest power the battery charges at, in W.",
-          "max_discharge_w": "The highest power the battery discharges at, in W.",
-          "floor_pct": "The lowest charge level to keep, when no reserve floor entity is picked.",
-          "kwp": "The panels' peak rating, in kWp.",
-          "min_amps": "The lowest current the charger can run at.",
-          "max_amps": "The highest current the charger can run at.",
-          "phases": "How many phases the charger uses.",
-          "voltage": "The supply voltage, usually 230 V.",
-          "rated_w": "How much power the load draws while running, in W.",
-          "run_minutes": "How long one run takes, in minutes.",
-          "earliest": "The earliest time a run may start.",
-          "done_by": "The time a run must be finished by.",
-          "days": "The days the load may run. Leave empty for every day."
-        }
-      },
-      "remove_device": {
-        "title": "Remove a device",
-        "description": "The device is removed from Halfhour and from Home Assistant, with its entities. Its sensors in Home Assistant are not touched.",
-        "data": {
-          "device": "Device"
-        },
-        "data_description": {
-          "device": "One of the devices behind this home in Halfhour."
-        }
       }
     },
     "error": {
-      "no_statistics": "This sensor has no statistics. Give it a state_class or pick another.",
-      "invalid_mapping": "Halfhour refused {field}: {detail}",
-      "device_limit": "Your Halfhour plan has no free device slot. Remove a device or change plan in Halfhour, then try again.",
-      "stale_revision": "This device was changed elsewhere while you edited it. The form now shows the latest version: check it and save again.",
-      "cannot_connect": "Couldn't reach Halfhour. Try again.",
-      "kind_unavailable": "Halfhour no longer offers this kind of device. Pick another."
-    },
-    "abort": {
-      "cannot_connect": "Couldn't reach Halfhour. Try again later.",
-      "not_found": "That device is no longer in Halfhour. It was removed elsewhere.",
-      "unknown_kind": "Halfhour no longer offers this kind of device. Remove it and add it again.",
-      "device_added": "{name} was added. Its readings appear in Home Assistant within a few seconds.",
-      "device_updated": "{name} was saved.",
-      "device_removed": "{name} was removed.",
-      "gateway_too_old": "This Halfhour server is too old for devices behind Home Assistant. Try again once it has been updated."
+      "no_statistics": "This sensor has no statistics. Give it a state_class or pick another."
     }
   },
   "entity": {

@@ -3,9 +3,17 @@
 The gateway owns the list and publishes it, retained, on homes/<hub>/devices
 with a revision that rises on every change; the newest revision wins and is
 kept across restarts, with the hub it came from: another hub's revisions
-start again at 0, so a list held for an old hub is dropped, not compared. Each Halfhour device becomes one HA device under the
-Halfhour hub device, and its read mappings join the upload roles as
-dev.<device id>.<reading>. Nothing here writes to any device.
+start again at 0, so a list held for an old hub is dropped, not compared.
+
+Each Halfhour device becomes a config subentry of the Halfhour entry (so it
+shows as its own item on the integration's page, added with "Add device" and
+edited with Reconfigure) holding one HA device under the Halfhour hub device;
+its read mappings join the upload roles as dev.<device id>.<reading>. The
+subentries follow the list: one is added for a new device, retitled on a
+rename and removed when the device goes. A subentry the user deletes in HA
+deletes the device in Halfhour; until Halfhour confirms, the device is held
+back (no subentry, entities or uploads) and the delete is retried on every
+device list and start. Nothing here writes to any device.
 """
 
 from __future__ import annotations
@@ -15,8 +23,10 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -24,6 +34,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.storage import Store
 
+from .api import HalfhourClient, HalfhourError, NotFoundError
 from .const import CONF_HUB_ID, DOMAIN, STORAGE_VERSION
 from .slots import Kind
 
@@ -34,6 +45,7 @@ _LOGGER = logging.getLogger(__name__)
 
 SAVE_DELAY = 1  # s: unload and HA's stop flush it
 CONTROLLED_BY = "controlled_by"  # the per-device "Controlled by Halfhour" sensor's key
+SUBENTRY_TYPE = "device"  # a device behind the hub, as a config subentry; its unique_id is the device id
 # The read mappings uploaded as slots, per kind, with how each is read. A
 # binary plugged_in is a read mapping too, but not a slot: it stays out.
 READINGS: dict[str, dict[str, Kind]] = {
@@ -126,16 +138,33 @@ def _device(d: Any, i: int) -> HubDevice:
     return HubDevice(device_id, kind, name, label, fields, dict(facts), kind_label or None)
 
 
-def _to_store(hub_id: str, devices: DeviceList) -> dict[str, Any]:
+def _to_store(hub_id: str, devices: DeviceList | None, deleting: set[str], shown: set[str]) -> dict[str, Any]:
     return {
         "v": 1,
         "hub_id": hub_id,
-        "revision": devices.revision,
+        "revision": devices.revision if devices is not None else None,
         "devices": [
             {"id": d.id, "kind": d.kind, "kind_label": d.kind_label, "name": d.name, "label": d.label, "mapping": d.mapping, "facts": d.facts}
-            for d in devices.devices
+            for d in (devices.devices if devices is not None else ())
         ],
+        "deleting": sorted(deleting),
+        "shown": sorted(shown),
     }
+
+
+def _ids(value: Any) -> set[str]:
+    return {i for i in value if isinstance(i, str) and _ID.match(i)} if isinstance(value, list) else set()
+
+
+def device_subentries(entry: ConfigEntry[Any]) -> dict[str, ConfigSubentry]:
+    """This entry's device subentries by device id."""
+    return {s.unique_id: s for s in entry.subentries.values() if s.subentry_type == SUBENTRY_TYPE and s.unique_id is not None}
+
+
+def subentry_revision(subentry: ConfigSubentry) -> int:
+    """The device list revision a subentry was made at: a list older than that may not know its device yet."""
+    revision = subentry.data.get("revision")
+    return revision if isinstance(revision, int) and not isinstance(revision, bool) else 0
 
 
 def devices_store(hass: HomeAssistant, entry_id: str) -> Store[dict[str, Any]]:
@@ -156,10 +185,10 @@ def device_info(entry_id: str, device: HubDevice) -> DeviceInfo:
     )
 
 
-def expected_entities(entry_id: str, devices: DeviceList | None) -> dict[str, tuple[HubDevice, str]]:
-    """unique_id -> (device, key) for every entity the device list calls for."""
+def expected_entities(entry_id: str, devices: tuple[HubDevice, ...]) -> dict[str, tuple[HubDevice, str]]:
+    """unique_id -> (device, key) for every entity these devices call for."""
     out: dict[str, tuple[HubDevice, str]] = {}
-    for device in devices.devices if devices is not None else ():
+    for device in devices:
         for key in (CONTROLLED_BY, *device.readings()):
             out[f"{entry_id}_{device.id}_{key}"] = (device, key)
     return out
@@ -179,11 +208,12 @@ def async_delete_device_issues(hass: HomeAssistant, entry_id: str, keep: set[str
 
 
 class HubDevices:
-    """The newest device list for one hub, kept in HA's device and entity registries."""
+    """The newest device list for one hub, kept as config subentries and in HA's device and entity registries."""
 
-    def __init__(self, hass: HomeAssistant, entry: HalfhourConfigEntry) -> None:
+    def __init__(self, hass: HomeAssistant, entry: HalfhourConfigEntry, client: HalfhourClient) -> None:
         self.hass = hass
         self.entry = entry
+        self._client = client  # deletes in Halfhour a device whose subentry was deleted here
         self._hub_id = entry.data[CONF_HUB_ID]  # the hub this list belongs to; saves are stamped with this,
         # not entry.data at save time, which reauth/reconfigure may have already moved on
         self.devices: DeviceList | None = None
@@ -192,13 +222,26 @@ class HubDevices:
         self._unsubs: list[CALLBACK_TYPE] = []
         self._unsaved = False
         self._started = False
+        self._hub_changed = False  # the stored list was another hub's: its subentries go too
+        self._deleting: set[str] = set()  # deleted here, held back until Halfhour's list drops them
+        self._shown: set[str] = set()  # the device ids with a subentry, as last seen: one missing was deleted
+        self._in_flight: set[str] = set()
+        self._syncing = False  # changing subentries: the update listener (run eagerly) must not follow our own changes
 
     @property
     def revision(self) -> int | None:
         return self.devices.revision if self.devices is not None else None
 
+    def visible(self) -> tuple[HubDevice, ...]:
+        """The listed devices less those deleted here and not yet gone from Halfhour's list."""
+        return tuple(d for d in self.devices.devices if d.id not in self._deleting) if self.devices is not None else ()
+
     def device(self, device_id: str) -> HubDevice | None:
-        return next((d for d in self.devices.devices if d.id == device_id), None) if self.devices is not None else None
+        return next((d for d in self.visible() if d.id == device_id), None)
+
+    def subentry_id(self, device_id: str) -> str | None:
+        subentry = device_subentries(self.entry).get(device_id)
+        return subentry.subentry_id if subentry is not None else None
 
     @staticmethod
     def roles_of(devices: DeviceList | None) -> dict[str, dict[str, Any]]:
@@ -211,7 +254,7 @@ class HubDevices:
 
     def read_roles(self) -> dict[str, dict[str, Any]]:
         """Upload roles for the devices' mapped readings: "dev.<id>.<reading>" -> {entity_id, invert, kind}."""
-        return self.roles_of(self.devices)
+        return self.roles_of(DeviceList(self.revision or 0, self.visible()))
 
     # -- lifecycle -----------------------------------------------------------------
 
@@ -223,11 +266,15 @@ class HubDevices:
         hub_id = data.get("hub_id", self._hub_id)
         if hub_id != self._hub_id:
             # Reauth or reconfigure moved this home to another hub, whose
-            # revisions start again at 0: the old list (and, on start, its HA
-            # devices, mirrors and upload roles) goes; the new hub's list follows.
+            # revisions start again at 0: the old list (and, on start, its
+            # subentries, HA devices, mirrors and upload roles) goes; the new
+            # hub's list follows.
             _LOGGER.info("Dropping the device list held for a previous Halfhour hub")
-            await self._store.async_remove()
+            self._hub_changed = True  # the store is overwritten only once start has removed its subentries
             return
+        self._deleting, self._shown = _ids(data.get("deleting")), _ids(data.get("shown"))
+        if data.get("revision") is None and not data.get("devices"):
+            return  # saved before any list arrived
         try:
             self.devices = _parse(data)
         except DeviceListError as err:
@@ -235,20 +282,27 @@ class HubDevices:
 
     @callback
     def async_start(self) -> None:
-        """Bring the registries in line with the held list and follow the entity registry."""
+        """Bring the subentries and registries in line with the held list, then follow both."""
         self._started = True
         self._unsubs.append(self.hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, self._registry_changed))
+        self._unsubs.append(self.entry.add_update_listener(self._entry_updated))
+        # A subentry deleted while this entry wasn't running: delete its device too (below, with any still pending).
+        self._deleted(self._shown - set(device_subentries(self.entry)), send=False)
         self._apply()
+        if self._hub_changed:
+            self._hub_changed = False
+            self._save()  # now stamped with the new hub
+        self._retry_deletes()
 
     async def async_stop(self) -> None:
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
         self._started = False
-        if self._unsaved and self.devices is not None:
+        if self._unsaved:
             # A new Store replaces this one on reload or removal: write now, not later.
             self._unsaved = False
-            await self._store.async_save(_to_store(self._hub_id, self.devices))
+            await self._store.async_save(self._data_to_save())
 
     @callback
     def add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
@@ -265,28 +319,92 @@ class HubDevices:
         except DeviceListError as err:
             _LOGGER.warning("Ignoring a bad device list from Halfhour: %s", err)
             return
-        if self.devices is not None and devices.revision <= self.devices.revision:
-            _LOGGER.debug("Ignoring Halfhour device list %s: not newer than %s", devices.revision, self.devices.revision)
+        newer = self.devices is None or devices.revision > self.devices.revision
+        if newer:
+            self._deleting &= {d.id for d in devices.devices}  # gone from Halfhour: the delete is done
+        self._retry_deletes()  # the list comes again on every reconnect: Halfhour may be back
+        if not newer:
+            _LOGGER.debug("Ignoring Halfhour device list %s: not newer than %s", devices.revision, self.revision)
             return
         self.devices = devices
-        self._unsaved = True
-        self._store.async_delay_save(self._data_to_save, SAVE_DELAY)
+        self._save()
         if self._started:
             self._apply()
 
     @callback
+    def _save(self) -> None:
+        self._unsaved = True
+        self._store.async_delay_save(self._data_to_save, SAVE_DELAY)
+
+    @callback
     def _data_to_save(self) -> dict[str, Any]:
         self._unsaved = False
-        assert self.devices is not None  # only scheduled once a list is held
-        return _to_store(self._hub_id, self.devices)
+        return _to_store(self._hub_id, self.devices, self._deleting, self._shown)
+
+    async def _entry_updated(self, _hass: HomeAssistant, _entry: ConfigEntry[Any]) -> None:
+        """A subentry added (by the add flow), deleted or renamed (by the user): follow it.
+
+        A subentry both added and deleted while this entry wasn't running was
+        never shown, so its device isn't deleted in Halfhour: a rare case
+        (the add flow while setup is retrying), left to the user to redo.
+        """
+        if self._syncing:
+            return
+        now = set(device_subentries(self.entry))
+        if now == self._shown:
+            # A rename here would be undone by Halfhour's next list: the name
+            # is Halfhour's, changed with Reconfigure, so put it back now.
+            names = {d.id: d.name for d in self.visible()}
+            if any(names.get(i, s.title) != s.title for i, s in device_subentries(self.entry).items()):
+                self._sync_subentries()
+            return
+        gone = self._shown - now
+        self._shown = now
+        self._deleted(gone)
+        self._save()
+        self._apply()
+
+    @callback
+    def _deleted(self, device_ids: set[str], send: bool = True) -> None:
+        """Hold back devices whose subentry was deleted here, and delete them in Halfhour."""
+        if not device_ids:
+            return
+        self._deleting |= device_ids
+        self._save()
+        for device_id in device_ids if send else ():
+            self._delete_later(device_id)
+
+    @callback
+    def _retry_deletes(self) -> None:
+        if self._started:
+            for device_id in self._deleting:
+                self._delete_later(device_id)
+
+    @callback
+    def _delete_later(self, device_id: str) -> None:
+        if device_id not in self._in_flight:
+            self._in_flight.add(device_id)
+            self.entry.async_create_background_task(self.hass, self._async_delete(device_id), f"halfhour delete device {device_id}")
+
+    async def _async_delete(self, device_id: str) -> None:
+        """Delete one device in Halfhour; it stays held back until Halfhour's list drops it."""
+        try:
+            await self._client.delete_device(device_id)
+        except NotFoundError:
+            pass  # already gone there
+        except HalfhourError as err:
+            _LOGGER.warning("Couldn't remove device %s from Halfhour (%s); will try again", device_id, err)
+        finally:
+            self._in_flight.discard(device_id)
 
     @callback
     def _apply(self) -> None:
+        self._sync_subentries()
         entry_id = self.entry.entry_id
         devices = dr.async_get(self.hass)
         entities = er.async_get(self.hass)
-        wanted = {d.id: d for d in self.devices.devices} if self.devices is not None else {}
-        expected = expected_entities(entry_id, self.devices)
+        wanted = {d.id: d for d in self.visible()}
+        expected = expected_entities(entry_id, self.visible())
         prefix = f"{entry_id}_"
         for dev in dr.async_entries_for_config_entry(devices, entry_id):
             ours = [i[1][len(prefix) :] for i in dev.identifiers if i[0] == DOMAIN and i[1].startswith(prefix)]
@@ -305,17 +423,59 @@ class HubDevices:
             )
         for device in wanted.values():
             info = device_info(entry_id, device)
-            devices.async_get_or_create(
+            subentry_id = self.subentry_id(device.id)
+            dev = devices.async_get_or_create(
                 config_entry_id=entry_id,
+                config_subentry_id=subentry_id,
                 identifiers=info["identifiers"],
                 name=device.name,
                 manufacturer=info["manufacturer"],
                 model=info["model"],
                 via_device=(DOMAIN, entry_id),
             )
+            if subentry_id is not None and None in dev.config_entries_subentries.get(entry_id, set()):
+                # Made before devices were subentries: it belongs to its subentry alone now.
+                devices.async_update_device(dev.id, remove_config_entry_id=entry_id, remove_config_subentry_id=None)
         self._check_entities()
         for cb in list(self._listeners):
             cb()
+
+    @callback
+    def _sync_subentries(self) -> None:
+        """One subentry per listed device: added, retitled, and removed once the list is new enough to have dropped it.
+
+        A subentry the add flow made is newer than the list until Halfhour's
+        next one arrives, so a list older than it doesn't remove it.
+        """
+        self._syncing = True
+        try:
+            self._sync_subentries_now()
+        finally:
+            self._syncing = False
+        shown = set(device_subentries(self.entry))
+        if shown != self._shown:
+            self._shown = shown  # our own changes aren't deletions
+            self._save()
+
+    @callback
+    def _sync_subentries_now(self) -> None:
+        entries = self.hass.config_entries
+        wanted = {d.id: d for d in self.visible()}
+        held = self.devices
+        for device_id, subentry in device_subentries(self.entry).items():
+            device = wanted.get(device_id)
+            if device is not None:
+                if subentry.title != device.name:
+                    entries.async_update_subentry(self.entry, subentry, title=device.name)
+            elif self._hub_changed or (held is not None and held.revision >= subentry_revision(subentry)):
+                entries.async_remove_subentry(self.entry, subentry.subentry_id)
+        present = device_subentries(self.entry)
+        for device_id, device in wanted.items():
+            if device_id not in present:
+                data = {"kind": device.kind, "revision": held.revision if held is not None else 0}
+                entries.async_add_subentry(
+                    self.entry, ConfigSubentry(data=MappingProxyType(data), subentry_type=SUBENTRY_TYPE, title=device.name, unique_id=device_id)
+                )
 
     @callback
     def _registry_changed(self, _event: Event[er.EventEntityRegistryUpdatedData]) -> None:
@@ -325,7 +485,7 @@ class HubDevices:
     def _check_entities(self) -> None:
         """A repair issue per device with a mapped entity missing from the entity registry."""
         entry_id = self.entry.entry_id
-        devices = self.devices.devices if self.devices is not None else ()
+        devices = self.visible()
         async_delete_device_issues(self.hass, entry_id, keep={d.id for d in devices})
         registry = er.async_get(self.hass)
         for device in devices:

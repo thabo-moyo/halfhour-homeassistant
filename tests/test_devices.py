@@ -8,16 +8,19 @@ import logging
 from collections.abc import Iterator
 from datetime import timedelta
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+from types import MappingProxyType
 
 import pytest
 from homeassistant.components.recorder import Recorder
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntryState, ConfigSubentry
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
@@ -176,6 +179,10 @@ def register(hass: HomeAssistant, *entity_ids: str) -> None:
         reg.async_get_or_create(domain, "acme", object_id, suggested_object_id=object_id)
 
 
+def subentries(entry: MockConfigEntry) -> dict[str, Any]:
+    return {s.unique_id: s for s in entry.subentries.values()}
+
+
 def issue(hass: HomeAssistant, entry: MockConfigEntry, device_id: str) -> ir.IssueEntry | None:
     return ir.async_get(hass).async_get_issue(DOMAIN, f"{entry.entry_id}_device_entity_missing_{device_id}")
 
@@ -189,6 +196,13 @@ async def test_a_device_list_makes_devices_under_the_hub(recorder_mock: Recorder
     hub = devices[entry.entry_id]
     battery, immersion = devices[f"{entry.entry_id}_{B}"], devices[f"{entry.entry_id}_{L}"]
     assert battery.via_device_id == hub.id and immersion.via_device_id == hub.id
+    # Each device is its own subentry of the Halfhour entry, holding its HA device.
+    subs = subentries(entry)
+    assert {d: s.title for d, s in subs.items()} == {B: "Home battery", L: "Immersion"}
+    assert subs[B].subentry_type == "device" and dict(subs[B].data) == {"kind": "battery", "revision": 1}
+    assert battery.config_entries_subentries == {entry.entry_id: {subs[B].subentry_id}}
+    assert immersion.config_entries_subentries == {entry.entry_id: {subs[L].subentry_id}}
+    assert hub.config_entries_subentries == {entry.entry_id: {None}}
     assert (battery.name, battery.model, battery.manufacturer, immersion.name) == ("Home battery", "Home battery", "Halfhour", "Immersion")
     assert (immersion.model, immersion.manufacturer) == ("load", "Halfhour")  # no served label: the kind itself
 
@@ -199,10 +213,16 @@ async def test_a_device_list_makes_devices_under_the_hub(recorder_mock: Recorder
     ent = er.async_get(hass).async_get("sensor.home_battery_controlled_by_halfhour")
     assert ent is not None and ent.entity_category is not None and ent.device_id == battery.id
 
+    ent = er.async_get(hass).async_get("sensor.home_battery_controlled_by_halfhour")
+    assert ent is not None and ent.config_subentry_id == subs[B].subentry_id
+
     # Renamed, then the load deleted.
     await deliver(hass, transport, device_list(2, {**BATTERY, "name": "Garage battery"}))
     devices = halfhour_devices(hass, entry)
     assert devices[f"{entry.entry_id}_{B}"].name == "Garage battery"
+    assert {d: s.title for d, s in subentries(entry).items()} == {B: "Garage battery"}
+    assert subentries(entry)[B].subentry_id == subs[B].subentry_id  # the same subentry, retitled
+    assert not any(c[0] == "DELETE" for c in server.mock_calls)  # Halfhour's own removal isn't sent back
     assert f"{entry.entry_id}_{L}" not in devices
     assert hass.states.get("sensor.immersion_controlled_by_halfhour") is None
     assert er.async_get(hass).async_get("sensor.immersion_controlled_by_halfhour") is None
@@ -376,15 +396,23 @@ async def test_a_list_held_for_another_hub_is_dropped(
     # What the old hub's list left in HA's device registry.
     dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, entry.entry_id)}, name="Halfhour")
     dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"{entry.entry_id}_{B}")}, name="Home battery")
+    hass.config_entries.async_add_subentry(entry, ConfigSubentry(data=MappingProxyType({"kind": "battery", "revision": 9}), subentry_type="device", title="Home battery", unique_id=B))
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done(wait_background_tasks=True)
 
+    assert not entry.subentries  # the old hub's device, whatever its revision
+    assert not any(c[0] == "DELETE" for c in server.mock_calls)  # nothing to delete at the new hub
     held = entry.runtime_data.devices
     assert held.revision is None
     assert held.read_roles() == {}
     assert not any(r.startswith("dev.") for r in entry.runtime_data.sync._mapping())  # no stale dev. role is uploaded
     assert f"{entry.entry_id}_{B}" not in halfhour_devices(hass, entry)
-    assert f"{DOMAIN}.{entry.entry_id}.devices" not in hass_storage
+    await hass.async_block_till_done()
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=SAVE_DELAY + 1))
+    await hass.async_block_till_done()
+    # Overwritten, stamped with the new hub, only once the old subentries are gone.
+    assert hass_storage[f"{DOMAIN}.{entry.entry_id}.devices"]["data"]["hub_id"] == HUB
+    assert hass_storage[f"{DOMAIN}.{entry.entry_id}.devices"]["data"]["revision"] is None
 
     transport.on_connect(0)
     await hass.async_block_till_done(wait_background_tasks=True)
@@ -402,7 +430,7 @@ async def test_a_save_is_stamped_with_the_hub_the_list_was_held_for(
     """Reauth or reconfigure updates entry.data then reloads: a list received just before that
     must still be flushed stamped with the hub it was held for, not the hub the reload moves to."""
     entry = make_entry(hass)  # entry.data[CONF_HUB_ID] == HUB
-    devices = HubDevices(hass, entry)
+    devices = HubDevices(hass, entry, AsyncMock())
     devices.offer(json.dumps(device_list(1, BATTERY)).encode())
     hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_HUB_ID: "hub-2"})
     await devices.async_stop()
@@ -447,3 +475,112 @@ async def test_the_inventory_is_resent_when_the_live_channel_reconnects(
     transport.on_connect(0)
     await hass.async_block_till_done(wait_background_tasks=True)
     assert len(puts()) == 2
+
+
+# -- a subentry deleted in Home Assistant -------------------------------------------------
+
+
+async def remove_subentry(hass: HomeAssistant, entry: MockConfigEntry, device_id: str) -> None:
+    """What deleting a device's subentry on the integration's page does."""
+    assert hass.config_entries.async_remove_subentry(entry, subentries(entry)[device_id].subentry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+def deletes(server: AiohttpClientMocker, device_id: str) -> int:
+    return sum(1 for c in server.mock_calls if c[0] == "DELETE" and str(c[1]).endswith(f"/ha/devices/{device_id}"))
+
+
+async def test_deleting_a_subentry_deletes_the_device_in_halfhour(
+    recorder_mock: Recorder, hass: HomeAssistant, server: AiohttpClientMocker, transport: FakeTransport
+) -> None:
+    server.delete(f"https://hh.test/api/v1/ha/devices/{B}", status=204)
+    entry = await setup(hass, transport)
+    await deliver(hass, transport, device_list(1, BATTERY, IMMERSION))
+    held = entry.runtime_data.devices
+    await remove_subentry(hass, entry, B)
+
+    assert deletes(server, B) == 1
+    # Held back until Halfhour's list drops it: no subentry, HA device, entities or uploads.
+    assert set(subentries(entry)) == {L}
+    assert f"{entry.entry_id}_{B}" not in halfhour_devices(hass, entry)
+    assert hass.states.get("sensor.home_battery_controlled_by_halfhour") is None
+    assert held.device(B) is None and not any(r.startswith(f"dev.{B}") for r in entry.runtime_data.sync._mapping())
+    await deliver(hass, transport, device_list(1, BATTERY, IMMERSION))  # the same list again, on a reconnect
+    assert set(subentries(entry)) == {L}
+
+    await deliver(hass, transport, device_list(2, IMMERSION))  # Halfhour's list without it
+    assert held._deleting == set()
+    assert set(subentries(entry)) == {L}
+    await deliver(hass, transport, device_list(3, IMMERSION, BATTERY))  # added back in Halfhour: it comes back
+    assert set(subentries(entry)) == {L, B}
+    assert hass.states.get("sensor.home_battery_controlled_by_halfhour") is not None
+
+
+async def test_a_failed_delete_is_retried_on_the_next_list_and_after_a_restart(
+    recorder_mock: Recorder, hass: HomeAssistant, server: AiohttpClientMocker, transport: FakeTransport, caplog: pytest.LogCaptureFixture
+) -> None:
+    server.delete(f"https://hh.test/api/v1/ha/devices/{B}", status=503, json={"detail": "busy"})
+    entry = await setup(hass, transport)
+    await deliver(hass, transport, device_list(1, BATTERY))
+    with caplog.at_level(logging.WARNING):
+        await remove_subentry(hass, entry, B)
+    assert deletes(server, B) == 1 and "will try again" in caplog.text
+    assert not entry.subentries  # still held back while Halfhour has it
+
+    await deliver(hass, transport, device_list(1, BATTERY))  # the retained list, on a reconnect
+    assert deletes(server, B) == 2
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert deletes(server, B) == 3
+    assert not entry.subentries and entry.runtime_data.devices.device(B) is None
+
+    server.clear_requests()
+    server.get("https://hh.test/api/v1/ha/config", json={"roles": ROLES, "presets": [], "mqtt": {"url": BROKER, "account": "acct"}})
+    server.delete(f"https://hh.test/api/v1/ha/devices/{B}", status=404, json={"detail": "no such device"})
+    await deliver(hass, transport, device_list(1, BATTERY))
+    assert deletes(server, B) == 1  # gone there already: nothing more to do but wait for the list
+    assert not entry.subentries
+
+
+async def test_a_subentry_deleted_while_the_entry_was_not_running(
+    recorder_mock: Recorder, hass: HomeAssistant, server: AiohttpClientMocker, transport: FakeTransport
+) -> None:
+    server.delete(f"https://hh.test/api/v1/ha/devices/{B}", status=204)
+    entry = await setup(hass, transport)
+    await deliver(hass, transport, device_list(1, BATTERY, IMMERSION))
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert hass.config_entries.async_remove_subentry(entry, subentries(entry)[B].subentry_id)
+    assert deletes(server, B) == 0
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert deletes(server, B) == 1
+    assert set(subentries(entry)) == {L}  # not made again from the held list
+    assert entry.runtime_data.devices.device(B) is None
+
+
+async def test_devices_made_before_subentries_move_into_theirs(
+    recorder_mock: Recorder, hass: HomeAssistant, server: AiohttpClientMocker, transport: FakeTransport, hass_storage: dict[str, Any]
+) -> None:
+    """0.4.0 before subentries linked each device to the entry itself."""
+    entry = make_entry(hass)
+    stored_list(hass_storage, entry, {"hub_id": HUB, **device_list(1, BATTERY)})
+    reg = dr.async_get(hass)
+    reg.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, entry.entry_id)}, name="Halfhour")
+    reg.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"{entry.entry_id}_{B}")}, name="Home battery")
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    sub = subentries(entry)[B]
+    assert halfhour_devices(hass, entry)[f"{entry.entry_id}_{B}"].config_entries_subentries == {entry.entry_id: {sub.subentry_id}}
+
+
+async def test_a_rename_in_home_assistant_is_put_back(
+    recorder_mock: Recorder, hass: HomeAssistant, server: AiohttpClientMocker, transport: FakeTransport
+) -> None:
+    entry = await setup(hass, transport)
+    await deliver(hass, transport, device_list(1, BATTERY))
+    hass.config_entries.async_update_subentry(entry, subentries(entry)[B], title="Mine")
+    await hass.async_block_till_done()
+    assert subentries(entry)[B].title == "Home battery"  # renamed with Reconfigure, where Halfhour hears it
+    assert not any(c[0] == "DELETE" for c in server.mock_calls)

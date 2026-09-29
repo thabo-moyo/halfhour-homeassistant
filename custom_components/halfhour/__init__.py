@@ -45,7 +45,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HalfhourConfigEntry) -> 
     await _async_remove_0_1_leftovers(hass, entry)
     mqtt = _mqtt(config)
 
-    devices = HubDevices(hass, entry)
+    devices = HubDevices(hass, entry, client)
     await devices.async_load()
     sync = HalfhourSync(hass, entry, client, partial(stats.fetch, hass), devices.read_roles)
     await sync.async_load()
