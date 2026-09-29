@@ -207,7 +207,7 @@ class PahoTransport:
 
 
 class HalfhourChannel:
-    """This home's MQTT connection: presence, Plans, config and commands."""
+    """This home's MQTT connection: presence, Plans, config, commands and the device list."""
 
     def __init__(
         self,
@@ -218,9 +218,13 @@ class HalfhourChannel:
         on_plan: Callable[[Plan], None],
         on_command: Callable[[str, dict[str, Any]], Awaitable[None]],
         verify_key: Callable[[], Awaitable[bool]],
+        on_devices: Callable[[bytes], None] | None = None,
         transport: Transport | None = None,
     ) -> None:
-        """verify_key checks the device token over HTTP: False only when it is refused."""
+        """verify_key checks the device token over HTTP: False only when it is refused.
+
+        on_devices gets the retained device list's raw payload; it parses it.
+        """
         self.hass = hass
         self.entry = entry
         self.url = url
@@ -228,6 +232,7 @@ class HalfhourChannel:
         self._on_plan = on_plan
         self._on_command = on_command
         self._verify_key = verify_key
+        self._on_devices = on_devices
         self._hub: str = entry.data[CONF_HUB_ID]
         self._transport: Transport = transport if transport is not None else PahoTransport(hass, self._hub)
         self._transport.on_connect = self._connected
@@ -360,7 +365,7 @@ class HalfhourChannel:
             _LOGGER.info("Halfhour's live connection is back")
         self._start_stable()
         self._transport.publish(self._status_topic, self._status("online"), QOS, True)
-        topics = [(f"homes/{self._hub}/config", QOS), (f"homes/{self._hub}/cmd", QOS)]
+        topics = [(f"homes/{self._hub}/config", QOS), (f"homes/{self._hub}/cmd", QOS), (f"homes/{self._hub}/devices", QOS)]
         if self.account:
             topics.append((f"accounts/{self.account}/plan", QOS))
         self._topics = [t for t, _ in topics]
@@ -411,6 +416,9 @@ class HalfhourChannel:
             self._command(payload)
         elif topic == f"homes/{self._hub}/config":
             self._config(payload)
+        elif topic == f"homes/{self._hub}/devices":
+            if self._on_devices is not None:
+                self._on_devices(payload)
         elif self.account and topic == f"accounts/{self.account}/plan":
             self._plan(payload)
 

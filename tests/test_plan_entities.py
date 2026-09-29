@@ -94,6 +94,7 @@ def serve(aioclient_mock: AiohttpClientMocker, body: dict[str, Any]) -> None:
     aioclient_mock.clear_requests()
     aioclient_mock.get("https://hh.test/api/v1/ha/config", json=body)
     aioclient_mock.post("https://hh.test/api/v1/ha/telemetry", status=202, json={"accepted": 0})
+    aioclient_mock.put("https://hh.test/api/v1/ha/inventory", status=204)
 
 
 async def setup(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, body: dict[str, Any] | None = None) -> MockConfigEntry:
@@ -554,6 +555,7 @@ async def test_a_failed_reread_is_retried_later(
     aioclient_mock.clear_requests()
     aioclient_mock.get("https://hh.test/api/v1/ha/config", status=503)
     aioclient_mock.post("https://hh.test/api/v1/ha/telemetry", status=202, json={"accepted": 0})
+    aioclient_mock.put("https://hh.test/api/v1/ha/inventory", status=204)
     await tick(hass, freezer, T0 + timedelta(minutes=15, seconds=1))
     assert entry.runtime_data is runtime
     assert entry.state is ConfigEntryState.LOADED

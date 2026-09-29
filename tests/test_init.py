@@ -35,6 +35,7 @@ def make_entry(hass: HomeAssistant, roles: list | None = None) -> MockConfigEntr
 def server(aioclient_mock: AiohttpClientMocker) -> AiohttpClientMocker:
     aioclient_mock.get("https://hh.test/api/v1/ha/config", json=CONFIG)
     aioclient_mock.post("https://hh.test/api/v1/ha/telemetry", status=202, json={"accepted": 0})
+    aioclient_mock.put("https://hh.test/api/v1/ha/inventory", status=204)
     return aioclient_mock
 
 

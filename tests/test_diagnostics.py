@@ -12,6 +12,7 @@ from custom_components.halfhour.diagnostics import async_get_config_entry_diagno
 async def test_diagnostics_show_cursors_and_redact_the_token(recorder_mock: Recorder, hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, hass_storage: dict) -> None:
     aioclient_mock.get("https://hh.test/api/v1/ha/config", json={"roles": [], "presets": []})
     aioclient_mock.post("https://hh.test/api/v1/ha/telemetry", status=202, json={"accepted": 0})
+    aioclient_mock.put("https://hh.test/api/v1/ha/inventory", status=204)
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id="hub-1",
@@ -30,4 +31,5 @@ async def test_diagnostics_show_cursors_and_redact_the_token(recorder_mock: Reco
     assert set(diag["cursors"]) == {"house_load_w"}
     assert diag["cursors"]["house_load_w"]["entity_id"] == "sensor.load"
     assert diag["synced_until"] is not None
+    assert diag["devices_synced_until"] is None  # no devices behind this home
     assert "queue" not in diag

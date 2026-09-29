@@ -14,8 +14,18 @@ rules:
       to it over MQTT, never polled.
   brands: done
   common-modules: done
-  config-flow: done
-  config-flow-test-coverage: done
+  config-flow:
+    status: done
+    comment: >-
+      Pairing, then the sensors step. Options is a menu: the sensors step, and
+      add, edit and remove a device behind this home. The device forms are
+      built from the kind schema Halfhour serves (GET /device-types); every
+      field has data_description.
+  config-flow-test-coverage:
+    status: done
+    comment: >-
+      Every step, error and abort, including the device forms against a mocked
+      gateway (422 on the named field, plan limit, stale revision, not found).
   dependency-transparency:
     status: done
     comment: >-
@@ -84,7 +94,9 @@ rules:
   # Gold
   devices:
     status: done
-    comment: One service device per paired home.
+    comment: >-
+      One service device per paired home, and one device per Halfhour device
+      behind it (via_device = the home's device).
   diagnostics: done
   discovery:
     status: exempt
@@ -100,16 +112,22 @@ rules:
   docs-troubleshooting: done
   docs-use-cases: done
   dynamic-devices:
-    status: exempt
-    comment: One device per config entry, created with it.
+    status: done
+    comment: Devices behind the hub, and their entities, appear as Halfhour's device list adds them.
   entity-category: done
   entity-device-class: done
   entity-disabled-by-default:
     status: exempt
     comment: >-
       Nine entities, none of them noisy or rarely useful: three for uploads,
-      Live, and five that show the live Plan.
-  entity-translations: done
+      Live, and five that show the live Plan; per device behind the hub, its
+      mapped readings and one diagnostic "Controlled by Halfhour".
+  entity-translations:
+    status: done
+    comment: >-
+      Every entity, option-flow step, field, error and abort is translated. The
+      device form's fields come from Halfhour's schema; each field and fact it
+      serves today has a label and data_description.
   exception-translations: done
   icon-translations: done
   reconfiguration-flow:
@@ -119,12 +137,13 @@ rules:
     status: done
     comment: >-
       A repair issue when a mapped sensor has no statistics or no longer exists,
-      cleared when fixed, and one when Halfhour offers an unencrypted public
+      cleared when fixed, one when a device behind the hub uses an entity that
+      no longer exists (cleared when it is back), and one when Halfhour offers an unencrypted public
       broker address. Auth problems (HTTP 401 or a broker refusing the key) go
       through reauthentication.
   stale-devices:
-    status: exempt
-    comment: One device per config entry, removed with it.
+    status: done
+    comment: A device dropped from Halfhour's device list is removed with its entities.
 
   # Platinum
   async-dependency:

@@ -18,6 +18,21 @@
       },
       "plan_made": {
         "default": "mdi:calendar-clock"
+      },
+      "controlled_by": {
+        "default": "mdi:eye-outline"
+      },
+      "device_power": {
+        "default": "mdi:flash"
+      },
+      "device_energy": {
+        "default": "mdi:lightning-bolt"
+      },
+      "device_soc": {
+        "default": "mdi:battery-medium"
+      },
+      "device_car_soc": {
+        "default": "mdi:car-electric"
       }
     },
     "binary_sensor": {

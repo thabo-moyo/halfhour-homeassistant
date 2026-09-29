@@ -86,8 +86,17 @@ def async_delete_issues(hass: HomeAssistant, entry_id: str, keep: set[str] | Non
 class HalfhourSync:
     """One paired home's cursor-driven uploader."""
 
-    def __init__(self, hass: HomeAssistant, entry: HalfhourConfigEntry, client: HalfhourClient, fetch: Fetch) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: HalfhourConfigEntry,
+        client: HalfhourClient,
+        fetch: Fetch,
+        device_roles: Callable[[], dict[str, dict[str, Any]]] | None = None,
+    ) -> None:
+        """device_roles gives the devices' read roles ("dev.<id>.<reading>"), uploaded like the house roles."""
         self.hass = hass
+        self._device_roles = device_roles
         self.entry = entry
         self.client = client
         self._fetch = fetch
@@ -107,11 +116,23 @@ class HalfhourSync:
         self._unsubs: list[CALLBACK_TYPE] = []
         self._later: CALLBACK_TYPE | None = None
         self._listeners: list[Callable[[], None]] = []
+        # Device roles the gateway dropped as unknown (the device was deleted
+        # there): not sent again until the next device list says otherwise.
+        self._dropped: set[str] = set()
 
     # -- state ---------------------------------------------------------------
 
     def _mapping(self) -> dict[str, dict[str, Any]]:
-        return cast(dict[str, dict[str, Any]], self.entry.options.get(CONF_MAPPING, {}))
+        """The house roles and the devices' read roles; a role that goes drops its cursor on the next sync."""
+        house = cast(dict[str, dict[str, Any]], self.entry.options.get(CONF_MAPPING, {}))
+        if self._device_roles is None:
+            return house
+        return {**house, **{role: m for role, m in self._device_roles().items() if role not in self._dropped}}
+
+    @callback
+    def async_device_list_changed(self) -> None:
+        """A new device list: it says which device roles exist, so send them all again."""
+        self._dropped.clear()
 
     @property
     def cursors(self) -> Cursors:
@@ -119,8 +140,19 @@ class HalfhourSync:
         return {role: dict(c) for role, c in self._cursors.items()}
 
     def synced_until(self) -> datetime | None:
-        """The earliest cursor over the mapped roles: all data before it is final."""
-        known = [self._cursor(role, m) for role, m in self._mapping().items() if role in self._cursors]
+        """The earliest cursor over the house roles: all the home's data before it is final.
+
+        A device added later backfills from a year back; that must not drag
+        the home's own progress back with it (see devices_synced_until).
+        """
+        return self._earliest(device=False)
+
+    def devices_synced_until(self) -> datetime | None:
+        """The earliest cursor over the devices' read roles: how far their backfill has come."""
+        return self._earliest(device=True)
+
+    def _earliest(self, device: bool) -> datetime | None:
+        known = [self._cursor(role, m) for role, m in self._mapping().items() if role in self._cursors and role.startswith("dev.") == device]
         return min(known) if known else None
 
     def _cursor(self, role: str, m: dict[str, Any]) -> datetime:
@@ -281,8 +313,9 @@ class HalfhourSync:
             # Stamped at the request itself, not the start of the sync: the
             # recorder reads before it can take seconds.
             self._last_send = dt_util.utcnow()
+            dropped: tuple[str, ...] = ()
             try:
-                await self.client.send(slots)
+                dropped = (await self.client.send(slots)).dropped_roles
             except AuthError:
                 _LOGGER.warning("Halfhour refused this home's token; pair again to resume uploads")
                 self._auth_failed = True
@@ -313,6 +346,7 @@ class HalfhourSync:
             if self._stopped:
                 return
             self._move(done, now)
+            self._drop(dropped)
             await self._save_and_drain(now)
         finally:
             self._syncing = False
@@ -379,6 +413,17 @@ class HalfhourSync:
             cursors[role] = {"entity_id": m["entity_id"], "invert": bool(m.get("invert", False)), "kind": role_kind(m), "cursor": new.isoformat()}
         self._cursors = cursors
 
+    @callback
+    def _drop(self, roles: tuple[str, ...]) -> None:
+        """Stop sending device roles the gateway dropped, and forget their cursors."""
+        new = {role for role in roles if role.startswith("dev.") and role not in self._dropped}
+        if not new:
+            return
+        _LOGGER.info("Halfhour no longer knows %s (a device removed there?); not sending it until the next device list", ", ".join(sorted(new)))
+        self._dropped |= new
+        for role in new:
+            self._cursors.pop(role, None)
+
     def _behind(self, now: datetime) -> bool:
         window = self._window()
         return any(self._cursor(role, m) + window < now for role, m in self._mapping().items())
@@ -411,6 +456,10 @@ class HalfhourSync:
         for role, m in mapping.items():
             entity_id = m["entity_id"]
             issue_id = f"{prefix}{role}"
+            if role.startswith("dev.") and registry.async_get(entity_id) is None:
+                # The device_entity_missing repair names this one, with the right advice.
+                ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+                continue
             if self._has_statistics(registry, entity_id):
                 ir.async_delete_issue(self.hass, DOMAIN, issue_id)
                 continue

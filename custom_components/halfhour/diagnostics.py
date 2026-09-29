@@ -20,12 +20,15 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: Halfhou
     runtime = entry.runtime_data
     sync, channel, plans = runtime.sync, runtime.channel, runtime.plans
     synced_until = sync.synced_until()
+    devices_synced_until = sync.devices_synced_until()
     now = dt_util.utcnow()
     plan = plans.plan
     return {
         "entry": async_redact_data(entry.as_dict(), TO_REDACT),
         "cursors": sync.cursors,
         "synced_until": synced_until.isoformat() if synced_until else None,
+        # Devices backfill apart from the house roles: a device added today reads back a year.
+        "devices_synced_until": devices_synced_until.isoformat() if devices_synced_until else None,
         "connected": sync.connected,
         "last_upload": sync.last_upload.isoformat() if sync.last_upload else None,
         "channel": (

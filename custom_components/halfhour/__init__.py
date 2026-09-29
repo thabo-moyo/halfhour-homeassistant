@@ -9,7 +9,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
@@ -21,6 +21,8 @@ from . import stats
 from .api import AuthError, HalfhourClient, HalfhourError
 from .channel import HalfhourChannel, url_allowed
 from .const import BROKER_RECHECK, CONF_ROLES, CONF_TOKEN, CONF_URL, DEFAULT_STALE_AFTER, DOMAIN, STORAGE_VERSION
+from .devices import HubDevices, async_delete_device_issues, devices_store
+from .inventory import InventoryUploader
 from .runtime import HalfhourRuntime, Plans, ReloadKey, plan_store
 from .sync import HalfhourSync, async_delete_issues
 
@@ -43,11 +45,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: HalfhourConfigEntry) -> 
     await _async_remove_0_1_leftovers(hass, entry)
     mqtt = _mqtt(config)
 
-    sync = HalfhourSync(hass, entry, client, partial(stats.fetch, hass))
+    devices = HubDevices(hass, entry)
+    await devices.async_load()
+    sync = HalfhourSync(hass, entry, client, partial(stats.fetch, hass), devices.read_roles)
     await sync.async_load()
     plans = Plans(hass, entry.entry_id, _stale_after(mqtt.get("stale_after_s")))
     await plans.async_load()
-    runtime = HalfhourRuntime(sync, None, plans, _reload_key(entry), _broker(mqtt))
+    inventory = InventoryUploader(hass, entry, client)
+    runtime = HalfhourRuntime(sync, None, plans, _reload_key(entry), _broker(mqtt), devices, inventory)
     url = runtime.broker[0]
     if url is not None:
 
@@ -65,14 +70,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: HalfhourConfigEntry) -> 
                 return True  # unreachable or busy: can't tell, so not a revocation
             return True
 
-        runtime.channel = HalfhourChannel(hass, entry, url, _account(mqtt), plans.offer, on_command, verify_key)
+        runtime.channel = HalfhourChannel(hass, entry, url, _account(mqtt), plans.offer, on_command, verify_key, devices.offer)
     else:
         ir.async_delete_issue(hass, DOMAIN, _insecure_issue(entry))
     entry.runtime_data = runtime
 
+    # A new device list says which device roles exist: any the gateway dropped are sent again.
+    entry.async_on_unload(devices.add_listener(sync.async_device_list_changed))
+    # The registries follow the held device list before the platforms add its entities.
+    devices.async_start()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     sync.async_start()
     plans.async_start()
+    inventory.async_start()
     if url is None or not url_allowed(url):
         # No channel will connect, and none tells this home when that changes:
         # read the config again now and then, and reload once a usable broker appears.
@@ -84,6 +94,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: HalfhourConfigEntry) -> 
 
         entry.async_on_unload(async_track_time_interval(hass, _recheck, BROKER_RECHECK))
     if runtime.channel is not None:
+        channel = runtime.channel
+        was_live = False
+
+        @callback
+        def _live_changed() -> None:
+            # Every (re)connect resends the entity inventory, so its age at
+            # Halfhour says whether this home is still there.
+            nonlocal was_live
+            if channel.live and not was_live:
+                inventory.async_request()
+            was_live = channel.live
+
+        entry.async_on_unload(channel.add_listener(_live_changed))
         # Not tied to the entry: an unload must not cancel it mid-connect, or the
         # channel's own "stopped while connecting" check never runs.
         hass.async_create_background_task(runtime.channel.async_start(), "halfhour live channel")
@@ -99,17 +122,22 @@ async def async_unload_entry(hass: HomeAssistant, entry: HalfhourConfigEntry) ->
             await runtime.channel.async_stop()
         await runtime.plans.async_stop()
         await runtime.sync.async_stop()
+        await runtime.inventory.async_stop()
+        await runtime.devices.async_stop()
         async_delete_issues(hass, entry.entry_id)
+        async_delete_device_issues(hass, entry.entry_id)
     return ok
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: HalfhourConfigEntry) -> None:
-    """Forget the sync cursors, the Plan and the repair issues when the home is removed."""
+    """Forget the sync cursors, the Plan, the device list and the repair issues when the home is removed."""
     async_delete_issues(hass, entry.entry_id)
+    async_delete_device_issues(hass, entry.entry_id)
     ir.async_delete_issue(hass, DOMAIN, _insecure_issue(entry))
     # The same keys HalfhourSync and Plans store under; no client is needed to delete them.
     await Store[dict[str, Any]](hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.cursors").async_remove()
     await plan_store(hass, entry.entry_id).async_remove()
+    await devices_store(hass, entry.entry_id).async_remove()
 
 
 async def _async_reload(hass: HomeAssistant, entry: HalfhourConfigEntry) -> None:

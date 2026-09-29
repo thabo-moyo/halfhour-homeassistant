@@ -52,7 +52,10 @@ class Harness:
         self.key_ok: bool | Exception = True  # what checking the key over HTTP finds
         self.gate: asyncio.Event | None = None  # when set, the key check waits for it
         self.verifies = 0
-        self.channel = HalfhourChannel(hass, self.entry, url, account, self.plans.append, self._command, self._verify, transport=self.transport)
+        self.device_lists: list[bytes] = []
+        self.channel = HalfhourChannel(
+            hass, self.entry, url, account, self.plans.append, self._command, self._verify, on_devices=self.device_lists.append, transport=self.transport
+        )
 
     async def _verify(self) -> bool:
         self.verifies += 1
@@ -156,14 +159,14 @@ async def test_on_connect_publishes_online_then_subscribes(hass: HomeAssistant) 
     assert (topic, qos, retain) == (f"homes/{HUB}/status", 1, True)
     assert online["state"] == "online" and online["v"] == 1
     assert online["since"] == will["since"]  # one connection, one since: the will never looks newer
-    assert h.transport.subscribed == [[(f"homes/{HUB}/config", 1), (f"homes/{HUB}/cmd", 1), ("accounts/acct/plan", 1)]]
+    assert h.transport.subscribed == [[(f"homes/{HUB}/config", 1), (f"homes/{HUB}/cmd", 1), (f"homes/{HUB}/devices", 1), ("accounts/acct/plan", 1)]]
     assert h.channel.live is True and seen == [True]
 
 
 async def test_no_plan_topic_without_an_account(hass: HomeAssistant) -> None:
     h = Harness(hass, account=None)
     await h.connected()
-    assert h.transport.subscribed == [[(f"homes/{HUB}/config", 1), (f"homes/{HUB}/cmd", 1)]]
+    assert h.transport.subscribed == [[(f"homes/{HUB}/config", 1), (f"homes/{HUB}/cmd", 1), (f"homes/{HUB}/devices", 1)]]
 
 
 async def test_listener_can_be_removed(hass: HomeAssistant) -> None:
@@ -304,6 +307,14 @@ async def test_bad_config_or_a_failing_reload_is_logged(hass: HomeAssistant, cap
     await h.message(f"homes/{HUB}/config", {"v": 1})
     assert h.commands == [("reload_config", {"v": 1})]
     assert "bad config" in caplog.text and "boom" in caplog.text
+
+
+async def test_the_device_list_reaches_on_devices_raw(hass: HomeAssistant) -> None:
+    h = Harness(hass)
+    await h.connected()
+    await h.message(f"homes/{HUB}/devices", b'{"v": 1}')
+    assert h.device_lists == [b'{"v": 1}']
+    assert h.commands == [] and h.plans == []
 
 
 async def test_a_message_on_another_topic_is_ignored(hass: HomeAssistant) -> None:
@@ -447,7 +458,7 @@ async def test_a_connection_up_for_a_minute_resets_the_backoff(hass: HomeAssista
 async def test_a_refused_subscription_is_logged_by_topic(hass: HomeAssistant, caplog: pytest.LogCaptureFixture) -> None:
     h = Harness(hass)
     await h.connected()
-    h.transport.on_subscribe([1, 1, 0x87])
+    h.transport.on_subscribe([1, 1, 1, 0x87])
     assert "accounts/acct/plan" in caplog.text and "135" in caplog.text
     assert f"homes/{HUB}/cmd" not in caplog.text
 

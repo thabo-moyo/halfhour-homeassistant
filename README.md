@@ -60,7 +60,7 @@ Copy `custom_components/halfhour` into your Home Assistant config's
 ## Configuration options
 
 The sensor choices can be changed at any time from the integration's
-**Configure**. Each reading takes one sensor:
+**Configure → Choose your sensors**. Each reading takes one sensor:
 
 | Field | What to pick |
 |---|---|
@@ -96,6 +96,49 @@ To move to a different Halfhour address, use **⋮ → Reconfigure** on the
 integration. A home's key belongs to one Halfhour server, so this asks for a
 fresh pairing code; your sensor choices and entities are kept.
 
+## Devices behind Home Assistant
+
+Besides the house readings, Halfhour can follow individual devices that Home
+Assistant already reads: a home battery, solar, an EV charger or a load (an
+immersion heater, a dishwasher). Each one becomes a device in Halfhour and,
+under the **Halfhour** device, a device in Home Assistant with its readings
+and a diagnostic **Controlled by Halfhour** sensor.
+
+**Monitor only.** In this version Halfhour only reads these devices. Some
+forms ask for a switch or setpoint entity (a battery's grid setpoint, a
+charger's charge switch, a load's switch): Halfhour stores it for when
+control arrives, but never switches or sets anything yet.
+
+Add, edit or remove them from the integration's **Configure**, which opens a
+menu:
+
+- **Choose your sensors**: the house readings, as above.
+- **Add a device**: pick the kind, then an entity for each reading and the
+  facts Halfhour needs (a battery's capacity and charge limits, a load's
+  rated power and run time, and so on). The kinds, fields, ranges and
+  units all come from Halfhour, so the form always matches what Halfhour
+  accepts. The pickers list entities of the right domain; Halfhour checks
+  the device class and unit when you save and marks the field it refuses.
+- **Edit a device** / **Remove a device**: pick one of the devices behind
+  this home. A field left empty on edit is removed. If the device was
+  changed in Halfhour while you were editing, the form shows the latest
+  version to check and save again.
+- A **load** also takes an optional label saying what it is (Dishwasher,
+  Immersion heater); on a load's days, leaving them all empty means every day.
+- A device that **needs attention** (an entity it uses no longer exists in
+  Home Assistant) can only be saved from Home Assistant once that entity is
+  re-picked, even to change just its facts: the form always sends the
+  entities, and Halfhour refuses one it can't find.
+
+Devices can also be added from Halfhour (**Devices → Home Assistant → Add
+device**); both work on the same list. A change appears in Home Assistant
+within seconds, over the live connection.
+
+Only entities Home Assistant has already told Halfhour about can be picked:
+it sends its entity list (names and units, never states) on setup and a
+minute after any change, so a brand-new entity can take a minute. Each
+device counts towards your Halfhour plan's device limit.
+
 ## How data is updated
 
 - Every **5 minutes** (a minute after the recorder compiles its 5-minute
@@ -130,7 +173,7 @@ for uploads:
 | Entity | Shows |
 |---|---|
 | `sensor.halfhour_last_upload` | When the last upload got through. |
-| `sensor.halfhour_synced_up_to` | Everything before this time is final at Halfhour. |
+| `sensor.halfhour_synced_up_to` | Everything before this time is final at Halfhour, for the home's own sensors. A device added later backfills apart; its progress is in the diagnostics download (`devices_synced_until`). |
 | `binary_sensor.halfhour_connected` | On while uploads succeed; off while Halfhour can't be reached or refuses this home's key. |
 
 and the live plan, below. It provides no actions, triggers or conditions of
@@ -199,6 +242,8 @@ automation:
 - A gap in a sensor's statistics is a gap at Halfhour; it is never filled
   with zeros.
 - The plan is read-only: this version never controls a battery or inverter.
+- Devices behind Home Assistant are monitor only: their switch and setpoint
+  entities are stored, never used, in this version.
 - The live connection must be encrypted unless the broker is on your local
   network.
 

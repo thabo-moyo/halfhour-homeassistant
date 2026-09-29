@@ -1,6 +1,7 @@
 """The sync engine: cursors, windows, handover, and every gateway answer."""
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -11,7 +12,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
-from custom_components.halfhour.api import AuthError, RejectedError, RetryLater
+from custom_components.halfhour.api import AuthError, RejectedError, RetryLater, SendResult
 from custom_components.halfhour.const import CONF_HUB_ID, CONF_MAPPING, CONF_ROLES, CONF_TOKEN, CONF_URL, DOMAIN, MAX_BATCH, SEND_GAP
 from custom_components.halfhour.slots import Period, slot_floor
 from custom_components.halfhour.sync import HalfhourSync
@@ -26,7 +27,7 @@ class FakeClient:
 
     async def send(self, slots):
         self.sent.append(list(slots))
-        r = self.script.pop(0) if self.script else len(slots)
+        r = self.script.pop(0) if self.script else SendResult(len(slots), ())
         if isinstance(r, Exception):
             raise r
         return r
@@ -571,3 +572,101 @@ async def test_resync_during_a_running_sync_is_not_undone(hass, now, freezer):
     await hass.async_block_till_done()
     assert stats.asked and min(start for _, _, start, _ in stats.asked) < datetime(2026, 1, 1, tzinfo=UTC)
     await sync.async_stop()
+
+
+# -- devices behind the hub -------------------------------------------------------
+
+DEV = "3f2a0000-0000-4000-8000-00000000000b"
+
+
+async def test_device_read_roles_upload_as_dev_slots_and_a_dropped_role_drops_its_cursor(hass: HomeAssistant, now):
+    hass.states.async_set("sensor.load", "400", {"state_class": "measurement"})
+    hass.states.async_set("sensor.bat_soc", "57", {"state_class": "measurement"})
+    entry = load_entry(hass, LOAD)
+    start = datetime(2026, 9, 28, 11, 0, tzinfo=UTC)
+    stats = FakeStats(five={"sensor.load": five_min(start, 13), "sensor.bat_soc": five_min(start, 13, mean=57.0)})
+    roles = {f"dev.{DEV}.soc": {"entity_id": "sensor.bat_soc", "invert": False, "kind": "percent"}}
+    sync = HalfhourSync(hass, entry, FakeClient(), stats, device_roles=lambda: dict(roles))
+    await sync.async_load()
+    cursor = {"cursor": start.isoformat()}
+    sync._cursors = {"house_load_w": {"entity_id": "sensor.load", **cursor}, f"dev.{DEV}.soc": {"entity_id": "sensor.bat_soc", "kind": "percent", **cursor}}
+    await sync.async_sync()
+    dev_slots = [s for s in sync.client.sent[0] if s["role"] == f"dev.{DEV}.soc"]
+    assert [(s["slot"][11:16], s["value"]) for s in dev_slots] == [("11:00", 57.0), ("11:30", 57.0), ("12:00", 57.0)]
+    assert set(sync.cursors) == {"house_load_w", f"dev.{DEV}.soc"}
+
+    roles.clear()  # the device was deleted
+    await asyncio.sleep(0)
+    sync._last_send = None
+    await sync.async_sync()
+    assert set(sync.cursors) == {"house_load_w"}
+    assert all(s["role"] == "house_load_w" for s in sync.client.sent[-1])
+
+
+async def test_a_dev_role_with_its_entity_gone_raises_no_no_statistics_issue(hass: HomeAssistant, now):
+    """The device_entity_missing repair covers a missing device entity; no_statistics would give the wrong advice."""
+    hass.set_state(CoreState.running)
+    er.async_get(hass).async_get_or_create("sensor", "acme", "soc", suggested_object_id="car_soc")  # registered, no state_class
+    entry = load_entry(hass, {})
+    roles = {
+        f"dev.{DEV}.soc": {"entity_id": "sensor.gone", "invert": False, "kind": "percent"},
+        f"dev.{DEV}.car_soc": {"entity_id": "sensor.car_soc", "invert": False, "kind": "percent"},
+        "house_load_w": {"entity_id": "sensor.gone_too", "invert": False, "kind": "power"},
+    }
+    sync = HalfhourSync(hass, entry, FakeClient(), FakeStats(), device_roles=lambda: roles)
+    await sync.async_load()
+    await sync.async_sync()
+    issues = ir.async_get(hass)
+    assert issues.async_get_issue(DOMAIN, f"{entry.entry_id}_no_statistics_dev.{DEV}.soc") is None
+    assert issues.async_get_issue(DOMAIN, f"{entry.entry_id}_no_statistics_dev.{DEV}.car_soc") is not None  # exists, no statistics
+    assert issues.async_get_issue(DOMAIN, f"{entry.entry_id}_no_statistics_house_load_w") is not None  # house roles unchanged
+
+
+async def test_dropped_device_roles_lose_their_cursor_until_the_next_device_list(hass: HomeAssistant, now, freezer, caplog):
+    """The gateway dropped a dev. role it no longer knows (the device was deleted): stop sending it, keep the house data flowing."""
+    hass.states.async_set("sensor.load", "400", {"state_class": "measurement"})
+    hass.states.async_set("sensor.bat_soc", "57", {"state_class": "measurement"})
+    entry = load_entry(hass, LOAD)
+    start = datetime(2026, 9, 28, 11, 0, tzinfo=UTC)
+    stats = FakeStats(five={"sensor.load": five_min(start, 13), "sensor.bat_soc": five_min(start, 13, mean=57.0)})
+    role = f"dev.{DEV}.soc"
+    roles = {role: {"entity_id": "sensor.bat_soc", "invert": False, "kind": "percent"}}
+    client = FakeClient(SendResult(3, (role, "house_load_w")))  # a house role is never dropped by the Integration
+    sync = HalfhourSync(hass, entry, client, stats, device_roles=lambda: dict(roles))
+    await sync.async_load()
+    cursor = {"cursor": start.isoformat()}
+    sync._cursors = {"house_load_w": {"entity_id": "sensor.load", **cursor}, role: {"entity_id": "sensor.bat_soc", "kind": "percent", **cursor}}
+    with caplog.at_level(logging.INFO, logger="custom_components.halfhour"):
+        await sync.async_sync()
+    assert set(sync.cursors) == {"house_load_w"}
+    assert sync.cursors["house_load_w"]["cursor"] == "2026-09-28T11:30:00+00:00"  # the house window still counts
+    assert caplog.text.count(role) == 1
+
+    freezer.tick(timedelta(minutes=30))
+    caplog.clear()
+    await sync.async_sync()
+    assert {s["role"] for s in client.sent[-1]} == {"house_load_w"}  # not sent again
+    assert set(sync.cursors) == {"house_load_w"}
+    assert role not in caplog.text  # logged once
+
+    sync.async_device_list_changed()  # a new device list: the roles it names are sent again
+    freezer.tick(timedelta(seconds=SEND_GAP))
+    await sync.async_sync()
+    assert role in sync._mapping()
+    assert role in sync.cursors  # backfilling again from the start
+
+
+async def test_synced_until_follows_the_house_roles_and_device_backfill_is_reported_apart(hass: HomeAssistant, now):
+    entry = load_entry(hass, LOAD)
+    role = f"dev.{DEV}.soc"
+    roles = {role: {"entity_id": "sensor.bat_soc", "invert": False, "kind": "percent"}}
+    sync = HalfhourSync(hass, entry, FakeClient(), FakeStats(), device_roles=lambda: dict(roles))
+    await sync.async_load()
+    sync._cursors = {
+        "house_load_w": {"entity_id": "sensor.load", "cursor": "2026-09-28T11:30:00+00:00"},
+        role: {"entity_id": "sensor.bat_soc", "kind": "percent", "cursor": "2025-10-03T00:00:00+00:00"},  # a new device, backfilling
+    }
+    assert sync.synced_until() == datetime(2026, 9, 28, 11, 30, tzinfo=UTC)
+    assert sync.devices_synced_until() == datetime(2025, 10, 3, tzinfo=UTC)
+    roles.clear()
+    assert sync.devices_synced_until() is None

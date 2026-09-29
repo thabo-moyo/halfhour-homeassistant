@@ -1,4 +1,4 @@
-"""What a loaded entry holds: the uploader, the live channel and the current Plan."""
+"""What a loaded entry holds: the uploader, the live channel, the current Plan and the devices."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ from homeassistant.util import dt as dt_util
 
 from .channel import HalfhourChannel
 from .const import CLOCK_SKEW, DOMAIN, STORAGE_VERSION
+from .devices import HubDevices
+from .inventory import InventoryUploader
 from .plan import Plan, PlanError, PlanSlot, covering_slot, from_store, is_stale, newer, to_store
 from .sync import HalfhourSync
 
@@ -158,18 +160,20 @@ class Plans:
 
 @dataclass
 class HalfhourRuntime:
-    """entry.runtime_data: the uploader, the live channel (None without a broker) and the Plan."""
+    """entry.runtime_data: the uploader, the live channel (None without a broker), the Plan and the devices."""
 
     sync: HalfhourSync
     channel: HalfhourChannel | None
     plans: Plans
     reload_key: ReloadKey  # the entry data and options that need a reload to change
     broker: tuple[str | None, str | None]  # (url, account) from /ha/config at setup
+    devices: HubDevices  # the devices behind this hub, from the retained device list
+    inventory: InventoryUploader  # sends the entity inventory the device forms pick from
 
     @callback
     def add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
         """Call cb on any change an entity may show; returns one unsubscribe for all."""
-        unsubs = [self.sync.add_listener(cb), self.plans.add_listener(cb)]
+        unsubs = [self.sync.add_listener(cb), self.plans.add_listener(cb), self.devices.add_listener(cb)]
         if self.channel is not None:
             unsubs.append(self.channel.add_listener(cb))
 
