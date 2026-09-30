@@ -1,5 +1,10 @@
 # Halfhour for Home Assistant
 
+> **Beta.** Halfhour and this integration are still being built, so every
+> release is a pre-release and things may change between versions. In HACS,
+> open Halfhour, choose **⋮ → Redownload**, turn on **Show beta versions** and
+> pick the newest one; HACS then offers each new beta as an update.
+
 Sends your home's half-hourly energy use (house load, and optionally grid,
 solar and battery) to [Halfhour](https://halfhour.energy), so its forecasts,
 battery plans and tariff comparisons use your real usage rather than a model,
